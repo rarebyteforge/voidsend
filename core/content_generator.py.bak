@@ -1,0 +1,174 @@
+# core/content_generator.py
+# VoidSend - Email content generator
+# Renders HTML email from user inputs using built-in layout templates.
+# No external API required — fully offline.
+
+import json
+import time
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Optional
+from jinja2 import Environment, FileSystemLoader
+
+LAYOUTS_DIR = Path(__file__).parent.parent / "templates" / "layouts"
+SAVED_DIR   = Path(__file__).parent.parent / "templates" / "saved"
+
+LAYOUT_CHOICES = [
+    ("minimal",      "Minimal",      "Clean single-column, text + CTA"),
+    ("newsletter",   "Newsletter",   "Header banner, sections, footer"),
+    ("announcement", "Announcement", "Bold centered headline, dark theme"),
+    ("promotional",  "Promotional",  "Offer/discount focused, gradient hero"),
+    ("plaintext",    "Plain Text",   "No HTML, formatted text only"),
+]
+
+
+@dataclass
+class ContentFields:
+    layout:        str = "minimal"
+    headline:      str = ""
+    intro:         str = ""
+    body_text:     str = ""
+    subject:       str = ""
+    brand_name:    str = ""
+    brand_color:   str = "#2563eb"
+    tagline:       str = ""
+    logo_url:      str = ""
+    cta_label:     str = ""
+    cta_url:       str = ""
+    offer_text:    str = ""
+    urgency_text:  str = ""
+    footer_note:   str = ""
+    template_name: str = ""
+    created_at:    str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
+
+
+@dataclass
+class GeneratedContent:
+    html:    str
+    text:    Optional[str]
+    subject: str
+    fields:  ContentFields
+
+
+def _get_jinja_env() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(str(LAYOUTS_DIR)),
+        autoescape=False,
+    )
+
+
+def render_content(fields: ContentFields) -> GeneratedContent:
+    env    = _get_jinja_env()
+    vars_  = asdict(fields)
+    is_plain = fields.layout == "plaintext"
+    template_file = f"{fields.layout}.{'txt' if is_plain else 'html'}"
+
+    try:
+        tmpl = env.get_template(template_file)
+    except Exception:
+        tmpl = env.get_template("minimal.html")
+        is_plain = False
+
+    rendered = tmpl.render(**vars_)
+
+    text = None
+    try:
+        plain_tmpl = env.get_template("plaintext.txt")
+        text = plain_tmpl.render(**vars_)
+    except Exception:
+        text = f"{fields.headline}\n\n{fields.intro}\n\n{fields.body_text}"
+
+    return GeneratedContent(
+        html=rendered if not is_plain else _wrap_plain_as_html(rendered),
+        text=rendered if is_plain else text,
+        subject=fields.subject or fields.headline,
+        fields=fields,
+    )
+
+
+def _wrap_plain_as_html(text: str) -> str:
+    escaped = (text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;"))
+    lines = escaped.split("\n")
+    html_lines = "<br>\n".join(lines)
+    return (
+        '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+        '<body style="font-family:monospace;font-size:14px;color:#333;'
+        'max-width:600px;margin:40px auto;padding:0 20px;line-height:1.7;">'
+        f"\n{html_lines}\n</body></html>"
+    )
+
+
+def preview_html(fields: ContentFields) -> str:
+    return render_content(fields).html
+
+
+# ── Library ───────────────────────────────────────────────────────────────────
+
+def save_to_library(fields: ContentFields) -> Path:
+    SAVED_DIR.mkdir(parents=True, exist_ok=True)
+    if not fields.template_name:
+        raise ValueError("Template name is required to save to library.")
+    safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in fields.template_name)
+    path = SAVED_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{safe}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(asdict(fields), f, indent=2)
+    return path
+
+
+def load_from_library(path: str | Path) -> ContentFields:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return ContentFields(**{
+        k: v for k, v in data.items()
+        if k in ContentFields.__dataclass_fields__
+    })
+
+
+def list_library() -> list[dict]:
+    SAVED_DIR.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for p in sorted(SAVED_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries.append({
+                "path":       str(p),
+                "name":       data.get("template_name", p.stem),
+                "layout":     data.get("layout", "unknown"),
+                "created_at": data.get("created_at", ""),
+                "headline":   data.get("headline", ""),
+                "filename":   p.name,
+            })
+        except Exception:
+            continue
+    return entries
+
+
+def delete_from_library(path: str | Path) -> bool:
+    p = Path(path)
+    if p.exists():
+        p.unlink()
+        return True
+    return False
+
+
+def duplicate_in_library(path: str | Path, new_name: str) -> Path:
+    fields = load_from_library(path)
+    fields.template_name = new_name
+    fields.created_at    = time.strftime("%Y-%m-%d %H:%M:%S")
+    return save_to_library(fields)
+
+
+def import_html_to_library(html_path: str | Path, template_name: str) -> Path:
+    html_path = Path(html_path)
+    if not html_path.exists():
+        raise FileNotFoundError(f"HTML file not found: {html_path}")
+    fields = ContentFields(
+        layout="custom",
+        template_name=template_name,
+        headline=template_name,
+        body_text=html_path.read_text(encoding="utf-8"),
+    )
+    return save_to_library(fields)

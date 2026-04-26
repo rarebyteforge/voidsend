@@ -1,0 +1,17 @@
+{% if brand_name %}{{ brand_name }}
+{% endif %}{{ headline }}
+{{ "=" * headline|length }}
+
+{% if intro %}{{ intro }}
+
+{% endif %}{% if body_text %}{{ body_text }}
+
+{% endif %}{% if offer_text %}Offer: {{ offer_text }}
+
+{% endif %}{% if urgency_text %}⏰ {{ urgency_text }}
+
+{% endif %}{% if cta_label and cta_url %}{{ cta_label }}: {{ cta_url }}
+
+{% endif %}---
+{% if footer_note %}{{ footer_note }}
+{% endif %}
