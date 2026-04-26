@@ -272,6 +272,11 @@ cmd_venv_status() {
 cmd_venv_on() {
   if [ "$IS_TERMUX" = true ]; then
     warn "Termux uses system Python — auto-venv not applicable here."
+    info "On Termux, packages are installed globally via: pip install -r requirements.txt"
+    info "To jump to project quickly, add this alias to ~/.bashrc:"
+    echo ""
+    echo "    alias cdv='cd ~/voidsend'"
+    echo ""
     return
   fi
 
