@@ -9,6 +9,7 @@ from textual.widgets import Header, Footer, DataTable, Button, Static
 from textual.screen import Screen
 
 from core.job_manager import JobManager, JobState, JobStatus
+from core.notifier import NotificationConfig, notify_job_event
 from ui.new_job_screen import NewJobScreen
 from ui.setup_screen import SetupScreen
 from config.settings import config_exists
@@ -77,9 +78,9 @@ class JobDashboard(Screen):
         }
 
         for state in self.job_manager.all_states():
-            elapsed  = f"{int(state.elapsed_seconds)}s"
-            progress = f"{state.progress_pct:.0f}%"
-            started  = time.strftime("%H:%M:%S", time.localtime(state.start_time))
+            elapsed    = f"{int(state.elapsed_seconds)}s"
+            progress   = f"{state.progress_pct:.0f}%"
+            started    = time.strftime("%H:%M:%S", time.localtime(state.start_time))
             status_str = status_colors.get(state.status, state.status.value)
 
             table.add_row(
@@ -165,16 +166,69 @@ class VoidSendApp(App):
 
     def __init__(self, smtp_config=None, **kwargs):
         super().__init__(**kwargs)
-        self.smtp_config = smtp_config
-        self.job_manager = JobManager(on_update=self._on_job_update)
+        self.smtp_config      = smtp_config
+        self.notification_cfg = NotificationConfig()
+        self.job_manager      = JobManager(
+            on_update=self._on_job_update
+        )
 
     def _on_job_update(self, state: JobState):
+        # Refresh dashboard
         try:
             screen = self.screen
             if isinstance(screen, JobDashboard):
                 screen.refresh_table()
         except Exception:
             pass
+
+        # Fire notifications on terminal states
+        if state.status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+        ):
+            import asyncio
+            try:
+                asyncio.ensure_future(
+                    notify_job_event(
+                        cfg         = self.notification_cfg,
+                        smtp_config = self.smtp_config,
+                        job_id      = state.job_id,
+                        name        = state.name,
+                        status      = state.status.value,
+                        sent        = state.sent,
+                        failed      = state.failed,
+                        elapsed     = state.elapsed_seconds,
+                    )
+                )
+            except Exception:
+                pass
+
+        # Milestone notifications (every 25%)
+        if (
+            self.notification_cfg.enabled
+            and self.notification_cfg.milestones
+            and state.status == JobStatus.RUNNING
+        ):
+            pct = state.progress_pct
+            for milestone in (25, 50, 75):
+                if abs(pct - milestone) < 1.0:
+                    import asyncio
+                    try:
+                        asyncio.ensure_future(
+                            notify_job_event(
+                                cfg         = self.notification_cfg,
+                                smtp_config = self.smtp_config,
+                                job_id      = state.job_id,
+                                name        = state.name,
+                                status      = f"{milestone}% complete",
+                                sent        = state.sent,
+                                failed      = state.failed,
+                                elapsed     = state.elapsed_seconds,
+                            )
+                        )
+                    except Exception:
+                        pass
 
     def on_mount(self):
         if not config_exists():

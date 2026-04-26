@@ -53,14 +53,9 @@ class JobDashboard(Screen):
     def on_mount(self):
         table = self.query_one(DataTable)
         table.add_columns(
-            "Job ID",
-            "Name",
-            "Status",
-            "Progress",
-            "Sent",
-            "Failed",
-            "Elapsed",
-            "Started",
+            "Job ID", "Name", "Status",
+            "Progress", "Sent", "Failed",
+            "Elapsed", "Started",
         )
         self.set_interval(1.0, self.refresh_table)
 
@@ -82,16 +77,10 @@ class JobDashboard(Screen):
             progress   = f"{state.progress_pct:.0f}%"
             started    = time.strftime("%H:%M:%S", time.localtime(state.start_time))
             status_str = status_colors.get(state.status, state.status.value)
-
             table.add_row(
-                state.job_id,
-                state.name[:28],
-                status_str,
-                progress,
-                str(state.sent),
-                str(state.failed),
-                elapsed,
-                started,
+                state.job_id, state.name[:28], status_str,
+                progress, str(state.sent), str(state.failed),
+                elapsed, started,
             )
 
         active = self.job_manager.active_count()
@@ -164,16 +153,18 @@ class VoidSendApp(App):
     }
     """
 
-    def __init__(self, smtp_config=None, **kwargs):
+    def __init__(
+        self,
+        smtp_config=None,
+        notification_cfg=None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.smtp_config      = smtp_config
-        self.notification_cfg = NotificationConfig()
-        self.job_manager      = JobManager(
-            on_update=self._on_job_update
-        )
+        self.notification_cfg = notification_cfg or NotificationConfig()
+        self.job_manager      = JobManager(on_update=self._on_job_update)
 
     def _on_job_update(self, state: JobState):
-        # Refresh dashboard
         try:
             screen = self.screen
             if isinstance(screen, JobDashboard):
@@ -181,7 +172,6 @@ class VoidSendApp(App):
         except Exception:
             pass
 
-        # Fire notifications on terminal states
         if state.status in (
             JobStatus.COMPLETED,
             JobStatus.FAILED,
@@ -204,16 +194,15 @@ class VoidSendApp(App):
             except Exception:
                 pass
 
-        # Milestone notifications (every 25%)
         if (
             self.notification_cfg.enabled
             and self.notification_cfg.milestones
             and state.status == JobStatus.RUNNING
         ):
+            import asyncio
             pct = state.progress_pct
             for milestone in (25, 50, 75):
                 if abs(pct - milestone) < 1.0:
-                    import asyncio
                     try:
                         asyncio.ensure_future(
                             notify_job_event(

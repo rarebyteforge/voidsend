@@ -1,308 +1,176 @@
-# ui/content_screen.py
-# VoidSend - Content generator TUI screen
+# core/content_generator.py
+# VoidSend - Email content generator
 
+import json
+import time
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.screen import Screen
-from textual.widgets import (
-    Button, Header, Footer, Input,
-    Label, Static, Select, TextArea
-)
-from typing import Optional, Callable
-from core.content_generator import (
-    ContentFields, render_content, save_to_library,
-    LAYOUT_CHOICES, GeneratedContent
-)
+from typing import Optional
+from jinja2 import Environment, FileSystemLoader
+
+LAYOUTS_DIR = Path(__file__).parent.parent / "templates" / "layouts"
+SAVED_DIR   = Path(__file__).parent.parent / "templates" / "saved"
+
+LAYOUT_CHOICES = [
+    ("minimal",      "Minimal",      "Clean single-column, text + CTA"),
+    ("newsletter",   "Newsletter",   "Header banner, sections, footer"),
+    ("announcement", "Announcement", "Bold centered headline, dark theme"),
+    ("promotional",  "Promotional",  "Offer/discount focused, gradient hero"),
+    ("plaintext",    "Plain Text",   "No HTML, formatted text only"),
+]
 
 
-class ContentScreen(Screen):
+@dataclass
+class ContentFields:
+    layout:        str = "minimal"
+    headline:      str = ""
+    intro:         str = ""
+    body_text:     str = ""
+    subject:       str = ""
+    brand_name:    str = ""
+    brand_color:   str = "#2563eb"
+    tagline:       str = ""
+    logo_url:      str = ""
+    cta_label:     str = ""
+    cta_url:       str = ""
+    offer_text:    str = ""
+    urgency_text:  str = ""
+    footer_note:   str = ""
+    template_name: str = ""
+    created_at:    str = field(
+        default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S")
+    )
 
-    BINDINGS = [
-        Binding("escape",  "cancel",       "Cancel"),
-        Binding("ctrl+p",  "preview",      "Preview"),
-        Binding("ctrl+s",  "save_library", "Save to Library"),
-    ]
 
-    def __init__(
-        self,
-        on_complete: Optional[Callable[[ContentFields, GeneratedContent], None]] = None,
-        prefill: Optional[ContentFields] = None,
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.on_complete = on_complete
-        self.prefill = prefill or ContentFields()
+@dataclass
+class GeneratedContent:
+    html:    str
+    text:    Optional[str]
+    subject: str
+    fields:  ContentFields
 
-    def compose(self) -> ComposeResult:
-        layout_options = [(label, key) for key, label, _ in LAYOUT_CHOICES]
 
-        yield Header()
-        yield Container(
-            Static("✏  Build Email Content", id="content_title"),
-            ScrollableContainer(
-                Static("── Layout ─────────────────────────────────", classes="section_sep"),
-                Horizontal(
-                    Vertical(
-                        Label("Layout Style"),
-                        Select(
-                            options=layout_options,
-                            id="layout_select",
-                            value=self.prefill.layout,
-                        ),
-                    ),
-                    Vertical(
-                        Label(""),
-                        Static("", id="layout_desc"),
-                    ),
-                    id="layout_row",
-                ),
-                Static("── Branding ───────────────────────────────", classes="section_sep"),
-                Horizontal(
-                    Vertical(
-                        Label("Brand / Sender Name"),
-                        Input(
-                            placeholder="e.g. Acme Newsletter",
-                            id="brand_name",
-                            value=self.prefill.brand_name,
-                        ),
-                    ),
-                    Vertical(
-                        Label("Brand Color (hex)"),
-                        Input(
-                            placeholder="#2563eb",
-                            id="brand_color",
-                            value=self.prefill.brand_color or "#2563eb",
-                        ),
-                    ),
-                    id="brand_row",
-                ),
-                Horizontal(
-                    Vertical(
-                        Label("Tagline (Newsletter layout)"),
-                        Input(
-                            placeholder="Your weekly dose of updates",
-                            id="tagline",
-                            value=self.prefill.tagline,
-                        ),
-                    ),
-                    Vertical(
-                        Label("Logo URL (optional)"),
-                        Input(
-                            placeholder="https://yourdomain.com/logo.png",
-                            id="logo_url",
-                            value=self.prefill.logo_url,
-                        ),
-                    ),
-                    id="brand_row2",
-                ),
-                Static("── Content ────────────────────────────────", classes="section_sep"),
-                Label("Email Subject Line"),
-                Input(
-                    placeholder="e.g. Hello {{name}}, here's your August update!",
-                    id="subject",
-                    value=self.prefill.subject,
-                ),
-                Label("Headline"),
-                Input(
-                    placeholder="e.g. Big news this month",
-                    id="headline",
-                    value=self.prefill.headline,
-                ),
-                Label("Intro / Subheadline"),
-                Input(
-                    placeholder="e.g. Here's what we've been working on...",
-                    id="intro",
-                    value=self.prefill.intro,
-                ),
-                Label("Body Text"),
-                TextArea(
-                    text=self.prefill.body_text,
-                    id="body_text",
-                ),
-                Static("── Promotional (optional) ─────────────────", classes="section_sep"),
-                Horizontal(
-                    Vertical(
-                        Label("Offer Text"),
-                        Input(
-                            placeholder="e.g. 30% OFF all plans",
-                            id="offer_text",
-                            value=self.prefill.offer_text,
-                        ),
-                    ),
-                    Vertical(
-                        Label("Urgency Text"),
-                        Input(
-                            placeholder="e.g. Offer ends Friday",
-                            id="urgency_text",
-                            value=self.prefill.urgency_text,
-                        ),
-                    ),
-                    id="promo_row",
-                ),
-                Static("── Call to Action ──────────────────────────", classes="section_sep"),
-                Horizontal(
-                    Vertical(
-                        Label("Button Label"),
-                        Input(
-                            placeholder="e.g. Read More",
-                            id="cta_label",
-                            value=self.prefill.cta_label,
-                        ),
-                    ),
-                    Vertical(
-                        Label("Button URL"),
-                        Input(
-                            placeholder="https://yourdomain.com/article",
-                            id="cta_url",
-                            value=self.prefill.cta_url,
-                        ),
-                    ),
-                    id="cta_row",
-                ),
-                Static("── Footer ──────────────────────────────────", classes="section_sep"),
-                Label("Footer Note"),
-                Input(
-                    placeholder="e.g. © 2026 Acme Inc. All rights reserved.",
-                    id="footer_note",
-                    value=self.prefill.footer_note,
-                ),
-                Static("── Library ─────────────────────────────────", classes="section_sep"),
-                Label("Template Name (required to save to library)"),
-                Input(
-                    placeholder="e.g. August Newsletter Base",
-                    id="template_name",
-                    value=self.prefill.template_name,
-                ),
-                Static("", id="status_msg"),
-                id="form_scroll",
-            ),
-            Horizontal(
-                Button("Preview [Ctrl+P]",     id="btn_preview", variant="default"),
-                Button("Save to Library [^S]", id="btn_library", variant="default"),
-                Button("✓ Use This Content",   id="btn_use",     variant="success"),
-                Button("Cancel [ESC]",         id="btn_cancel",  variant="error"),
-                id="content_actions",
-            ),
-            id="content_container",
-        )
-        yield Footer()
+def _get_jinja_env() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(str(LAYOUTS_DIR)),
+        autoescape=False,
+    )
 
-    def on_mount(self):
-        self._update_layout_desc(self.prefill.layout)
 
-    def on_select_changed(self, event: Select.Changed):
-        if event.select.id == "layout_select":
-            self._update_layout_desc(str(event.value))
+def render_content(fields: ContentFields) -> GeneratedContent:
+    env      = _get_jinja_env()
+    vars_    = asdict(fields)
+    is_plain = fields.layout == "plaintext"
+    tmpl_file = f"{fields.layout}.{'txt' if is_plain else 'html'}"
 
-    def _update_layout_desc(self, key: str):
-        desc = next((d for k, _, d in LAYOUT_CHOICES if k == key), "")
-        self.query_one("#layout_desc", Static).update(f"[dim]{desc}[/dim]")
+    try:
+        tmpl = env.get_template(tmpl_file)
+    except Exception:
+        tmpl     = env.get_template("minimal.html")
+        is_plain = False
 
-    def _set_status(self, msg: str, color: str = "white"):
-        self.query_one("#status_msg", Static).update(f"[{color}]{msg}[/{color}]")
+    rendered = tmpl.render(**vars_)
 
-    def _collect_fields(self) -> ContentFields:
-        def val(id_: str) -> str:
-            try:
-                w = self.query_one(f"#{id_}")
-                if hasattr(w, "text"):
-                    return w.text.strip()
-                return w.value.strip()
-            except Exception:
-                return ""
+    text = None
+    try:
+        plain_tmpl = env.get_template("plaintext.txt")
+        text = plain_tmpl.render(**vars_)
+    except Exception:
+        text = f"{fields.headline}\n\n{fields.intro}\n\n{fields.body_text}"
 
-        return ContentFields(
-            layout        = str(self.query_one("#layout_select", Select).value),
-            subject       = val("subject"),
-            headline      = val("headline"),
-            intro         = val("intro"),
-            body_text     = val("body_text"),
-            brand_name    = val("brand_name"),
-            brand_color   = val("brand_color") or "#2563eb",
-            tagline       = val("tagline"),
-            logo_url      = val("logo_url"),
-            cta_label     = val("cta_label"),
-            cta_url       = val("cta_url"),
-            offer_text    = val("offer_text"),
-            urgency_text  = val("urgency_text"),
-            footer_note   = val("footer_note"),
-            template_name = val("template_name"),
-        )
+    return GeneratedContent(
+        html    = rendered if not is_plain else _wrap_plain_as_html(rendered),
+        text    = rendered if is_plain else text,
+        subject = fields.subject or fields.headline,
+        fields  = fields,
+    )
 
-    def _validate(self, fields: ContentFields) -> list[str]:
-        errors = []
-        if not fields.headline:
-            errors.append("Headline is required")
-        if not fields.subject:
-            errors.append("Subject line is required")
-        if fields.brand_color and not fields.brand_color.startswith("#"):
-            errors.append("Brand color must be hex e.g. #2563eb")
-        return errors
 
-    def action_preview(self):
-        self._do_preview()
+def _wrap_plain_as_html(text: str) -> str:
+    escaped    = (text.replace("&", "&amp;")
+                      .replace("<", "&lt;")
+                      .replace(">", "&gt;"))
+    html_lines = "<br>\n".join(escaped.split("\n"))
+    return (
+        '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+        '<body style="font-family:monospace;font-size:14px;color:#333;'
+        'max-width:600px;margin:40px auto;padding:0 20px;line-height:1.7;">'
+        f"\n{html_lines}\n</body></html>"
+    )
 
-    def action_save_library(self):
-        self._do_save_library()
 
-    def _do_preview(self):
-        fields = self._collect_fields()
-        errors = self._validate(fields)
-        if errors:
-            self._set_status("✗ " + " | ".join(errors), "red")
-            return
+def preview_html(fields: ContentFields) -> str:
+    return render_content(fields).html
+
+
+# ── Library ───────────────────────────────────────────────────────────────────
+
+def save_to_library(fields: ContentFields) -> Path:
+    SAVED_DIR.mkdir(parents=True, exist_ok=True)
+    if not fields.template_name:
+        raise ValueError("Template name is required to save to library.")
+    safe = "".join(
+        c if c.isalnum() or c in "-_ " else "_"
+        for c in fields.template_name
+    )
+    path = SAVED_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{safe}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(asdict(fields), f, indent=2)
+    return path
+
+
+def load_from_library(path: str | Path) -> ContentFields:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return ContentFields(**{
+        k: v for k, v in data.items()
+        if k in ContentFields.__dataclass_fields__
+    })
+
+
+def list_library() -> list[dict]:
+    SAVED_DIR.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for p in sorted(SAVED_DIR.glob("*.json"), reverse=True):
         try:
-            generated    = render_content(fields)
-            preview_path = Path.home() / ".voidsend" / "preview.html"
-            preview_path.parent.mkdir(parents=True, exist_ok=True)
-            preview_path.write_text(generated.html, encoding="utf-8")
-            self._set_status(
-                f"✓ Preview saved → {preview_path}  (open in browser)",
-                "green"
-            )
-        except Exception as e:
-            self._set_status(f"✗ Preview error: {e}", "red")
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries.append({
+                "path":       str(p),
+                "name":       data.get("template_name", p.stem),
+                "layout":     data.get("layout", "unknown"),
+                "created_at": data.get("created_at", ""),
+                "headline":   data.get("headline", ""),
+                "filename":   p.name,
+            })
+        except Exception:
+            continue
+    return entries
 
-    def _do_save_library(self):
-        fields = self._collect_fields()
-        if not fields.template_name:
-            self._set_status("✗ Enter a Template Name to save", "yellow")
-            return
-        errors = self._validate(fields)
-        if errors:
-            self._set_status("✗ " + " | ".join(errors), "red")
-            return
-        try:
-            save_to_library(fields)
-            self._set_status(f"✓ Saved: {fields.template_name}", "green")
-        except Exception as e:
-            self._set_status(f"✗ Save error: {e}", "red")
 
-    def _do_use(self):
-        fields = self._collect_fields()
-        errors = self._validate(fields)
-        if errors:
-            self._set_status("✗ " + " | ".join(errors), "red")
-            return
-        try:
-            generated = render_content(fields)
-            if self.on_complete:
-                self.on_complete(fields, generated)
-            self.app.pop_screen()
-        except Exception as e:
-            self._set_status(f"✗ Render error: {e}", "red")
+def delete_from_library(path: str | Path) -> bool:
+    p = Path(path)
+    if p.exists():
+        p.unlink()
+        return True
+    return False
 
-    def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "btn_preview":
-            self._do_preview()
-        elif event.button.id == "btn_library":
-            self._do_save_library()
-        elif event.button.id == "btn_use":
-            self._do_use()
-        elif event.button.id == "btn_cancel":
-            self.action_cancel()
 
-    def action_cancel(self):
-        self.app.pop_screen()
+def duplicate_in_library(path: str | Path, new_name: str) -> Path:
+    fields              = load_from_library(path)
+    fields.template_name = new_name
+    fields.created_at   = time.strftime("%Y-%m-%d %H:%M:%S")
+    return save_to_library(fields)
+
+
+def import_html_to_library(html_path: str | Path, template_name: str) -> Path:
+    html_path = Path(html_path)
+    if not html_path.exists():
+        raise FileNotFoundError(f"HTML file not found: {html_path}")
+    fields = ContentFields(
+        layout        = "custom",
+        template_name = template_name,
+        headline      = template_name,
+        body_text     = html_path.read_text(encoding="utf-8"),
+    )
+    return save_to_library(fields)
