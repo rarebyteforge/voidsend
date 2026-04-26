@@ -17,10 +17,11 @@ from config.settings import config_exists
 class JobDashboard(Screen):
 
     BINDINGS = [
-        Binding("n", "new_job", "New Job"),
+        Binding("n", "new_job",    "New Job"),
+        Binding("l", "library",    "Library"),
         Binding("c", "cancel_job", "Cancel Job"),
-        Binding("s", "settings", "Settings"),
-        Binding("q", "quit", "Quit"),
+        Binding("s", "settings",   "Settings"),
+        Binding("q", "quit",       "Quit"),
     ]
 
     def __init__(self, job_manager: JobManager, smtp_config, **kwargs):
@@ -38,9 +39,10 @@ class JobDashboard(Screen):
             ),
             DataTable(id="job_table"),
             Horizontal(
-                Button("+ New Job [N]", id="btn_new", variant="success"),
-                Button("Cancel Job [C]", id="btn_cancel", variant="error"),
-                Button("Settings [S]", id="btn_settings", variant="default"),
+                Button("+ New Job [N]",  id="btn_new",      variant="success"),
+                Button("Library [L]",    id="btn_library",  variant="default"),
+                Button("Cancel Job [C]", id="btn_cancel",   variant="error"),
+                Button("Settings [S]",   id="btn_settings", variant="default"),
                 id="action_bar",
             ),
             id="main_container",
@@ -75,9 +77,9 @@ class JobDashboard(Screen):
         }
 
         for state in self.job_manager.all_states():
-            elapsed = f"{int(state.elapsed_seconds)}s"
+            elapsed  = f"{int(state.elapsed_seconds)}s"
             progress = f"{state.progress_pct:.0f}%"
-            started = time.strftime("%H:%M:%S", time.localtime(state.start_time))
+            started  = time.strftime("%H:%M:%S", time.localtime(state.start_time))
             status_str = status_colors.get(state.status, state.status.value)
 
             table.add_row(
@@ -92,7 +94,7 @@ class JobDashboard(Screen):
             )
 
         active = self.job_manager.active_count()
-        total = len(self.job_manager.all_states())
+        total  = len(self.job_manager.all_states())
         self.query_one("#status_bar", Static).update(
             f"  Jobs: {total} total | {active} active"
         )
@@ -101,6 +103,10 @@ class JobDashboard(Screen):
         self.app.push_screen(
             NewJobScreen(self.job_manager, self.smtp_config)
         )
+
+    def action_library(self):
+        from ui.library_screen import LibraryScreen
+        self.app.push_screen(LibraryScreen())
 
     def action_cancel_job(self):
         table = self.query_one(DataTable)
@@ -116,6 +122,8 @@ class JobDashboard(Screen):
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_new":
             self.action_new_job()
+        elif event.button.id == "btn_library":
+            self.action_library()
         elif event.button.id == "btn_cancel":
             self.action_cancel_job()
         elif event.button.id == "btn_settings":
