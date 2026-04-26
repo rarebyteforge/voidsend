@@ -78,7 +78,7 @@ cmd_update() {
   local target="$1"
   local full_path="$PROJECT_DIR/$target"
   local tmp
-  tmp=$(mktemp /tmp/voidsend_update_XXXXXX)
+  tmp=$(mktemp "$TMPDIR/voidsend_update_XXXXXX")
 
   if [ -z "$target" ]; then
     error "Usage: ./dev.sh update <relative/path/to/file>"
