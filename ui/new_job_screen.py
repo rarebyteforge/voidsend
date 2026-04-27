@@ -1,6 +1,6 @@
 # ui/new_job_screen.py
 # VoidSend - New job creation form
-# Added: send_limit field to cap emails per job
+# Added: repeat_count — send same email N times per subscriber
 
 from pathlib import Path
 from textual.app import ComposeResult
@@ -106,6 +106,11 @@ class NewJobScreen(Screen):
         min-height: 1;
         margin-bottom: 1;
     }
+    #send_summary {
+        margin-top: 1;
+        min-height: 1;
+        color: $accent;
+    }
     """
 
     def __init__(
@@ -118,17 +123,18 @@ class NewJobScreen(Screen):
         self.job_manager  = job_manager
         self.smtp_config  = smtp_config
         self._generated: Optional[GeneratedContent] = None
-        self._source      = "files"
+        self._source       = "files"
 
         # Field values
-        self._job_name   = ""
-        self._csv_path   = ""
-        self._html_path  = ""
-        self._text_path  = ""
-        self._subject    = ""
-        self._max_conn   = "5"
-        self._delay      = "0.3"
-        self._send_limit = ""   # empty = send all
+        self._job_name     = ""
+        self._csv_path     = ""
+        self._html_path    = ""
+        self._text_path    = ""
+        self._subject      = ""
+        self._max_conn     = "5"
+        self._delay        = "0.3"
+        self._send_limit   = ""   # blank = all
+        self._repeat_count = "1"  # default 1 copy
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -159,16 +165,41 @@ class NewJobScreen(Screen):
                 ),
                 Static("", id="preview_info"),
 
-                # ── Send Limit ────────────────────────────────────────────
-                Label("Send Limit (optional — leave blank to send all)"),
+                # ── Volume controls ───────────────────────────────────────
+                Label("Volume Controls"),
                 Horizontal(
-                    Static(
-                        "[dim]all subscribers[/dim]",
-                        id="val_send_limit",
+                    Vertical(
+                        Label("Send Limit"),
+                        Horizontal(
+                            Static(
+                                "[dim]all[/dim]",
+                                id="val_send_limit",
+                            ),
+                            Button(
+                                "edit",
+                                id="btn_edit_send_limit",
+                                variant="default",
+                            ),
+                            classes="field_row",
+                        ),
                     ),
-                    Button("edit", id="btn_edit_send_limit", variant="default"),
-                    classes="field_row",
+                    Vertical(
+                        Label("Copies Per Subscriber"),
+                        Horizontal(
+                            Static("1", id="val_repeat_count"),
+                            Button(
+                                "edit",
+                                id="btn_edit_repeat_count",
+                                variant="default",
+                            ),
+                            classes="field_row",
+                        ),
+                    ),
+                    id="volume_row",
                 ),
+
+                # ── Send summary ──────────────────────────────────────────
+                Static("", id="send_summary"),
 
                 # ── Content Source ────────────────────────────────────────
                 Label("Content Source"),
@@ -185,7 +216,11 @@ class NewJobScreen(Screen):
                         "[dim]tap browse to select HTML template[/dim]",
                         id="val_html_path",
                     ),
-                    Button("browse", id="btn_browse_html", variant="default"),
+                    Button(
+                        "browse",
+                        id="btn_browse_html",
+                        variant="default",
+                    ),
                     classes="field_row",
                     id="html_row",
                 ),
@@ -195,7 +230,11 @@ class NewJobScreen(Screen):
                         "[dim]tap browse (optional)[/dim]",
                         id="val_text_path",
                     ),
-                    Button("browse", id="btn_browse_text", variant="default"),
+                    Button(
+                        "browse",
+                        id="btn_browse_text",
+                        variant="default",
+                    ),
                     classes="field_row",
                     id="text_row",
                 ),
@@ -208,7 +247,11 @@ class NewJobScreen(Screen):
                         "[dim]tap edit to enter subject[/dim]",
                         id="val_subject",
                     ),
-                    Button("edit", id="btn_edit_subject", variant="default"),
+                    Button(
+                        "edit",
+                        id="btn_edit_subject",
+                        variant="default",
+                    ),
                     classes="field_row",
                     id="subject_row",
                 ),
@@ -229,8 +272,8 @@ class NewJobScreen(Screen):
                     id="content_btns",
                 ),
 
-                # ── Options ───────────────────────────────────────────────
-                Label("Options"),
+                # ── SMTP Options ──────────────────────────────────────────
+                Label("SMTP Options"),
                 Horizontal(
                     Vertical(
                         Label("Unsub Footer"),
@@ -244,7 +287,7 @@ class NewJobScreen(Screen):
                         ),
                     ),
                     Vertical(
-                        Label("Max Connections"),
+                        Label("Max Conn"),
                         Horizontal(
                             Static("5", id="val_max_conn"),
                             Button(
@@ -331,6 +374,33 @@ class NewJobScreen(Screen):
         except Exception:
             pass
 
+    def _update_send_summary(self):
+        """Show a live summary of total emails that will be sent."""
+        try:
+            limit  = int(self._send_limit) if self._send_limit else None
+            repeat = int(self._repeat_count) if self._repeat_count else 1
+
+            if self._csv_path and Path(self._csv_path).exists():
+                result    = load_subscribers(self._csv_path)
+                sub_count = result.valid_count
+                effective = min(limit, sub_count) if limit else sub_count
+                total     = effective * repeat
+
+                parts = [f"[cyan]Subscribers: {effective}[/cyan]"]
+                if limit and limit < sub_count:
+                    parts.append(f"[yellow](limit {limit} of {sub_count})[/yellow]")
+                if repeat > 1:
+                    parts.append(f"[yellow]× {repeat} copies[/yellow]")
+                parts.append(f"= [bold green]{total} total emails[/bold green]")
+
+                self.query_one("#send_summary", Static).update(
+                    "  " + "  ".join(parts)
+                )
+            else:
+                self.query_one("#send_summary", Static).update("")
+        except Exception:
+            self.query_one("#send_summary", Static).update("")
+
     # ── Input dialogs ─────────────────────────────────────────────────────────
 
     def _edit_job_name(self):
@@ -366,34 +436,78 @@ class NewJobScreen(Screen):
             self._send_limit = val
             if val:
                 self._set_field(
-                    "val_send_limit",
-                    f"first {val} subscribers",
+                    "val_send_limit", f"first {val}"
                 )
             else:
                 try:
                     self.query_one(
                         "#val_send_limit", Static
-                    ).update("[dim]all subscribers[/dim]")
+                    ).update("[dim]all[/dim]")
                 except Exception:
                     pass
+            self._update_send_summary()
+
         def validate(val: str):
             if not val:
-                return None  # blank = send all, valid
+                return None
             try:
                 n = int(val)
                 if n < 1:
                     return "Must be at least 1"
             except ValueError:
                 return "Must be a whole number or leave blank"
+
         self.app.push_screen(InputDialog(
             title         = "Send Limit",
-            label         = "Max emails to send (leave blank for all):",
+            label         = "Max subscribers to send to (blank = all):",
             on_submit     = on_submit,
             initial_value = self._send_limit,
             hint          = (
-                "e.g. 100 sends to first 100 subscribers only.\n"
-                "Useful for daily limits or staged sends.\n"
+                "Caps the subscriber list.\n"
+                "e.g. 100 sends to first 100 only.\n"
                 "Leave blank to send to entire list."
+            ),
+            validator     = validate,
+        ))
+
+    def _edit_repeat_count(self):
+        from ui.input_dialog import InputDialog
+        def on_submit(val: str):
+            val = val.strip() or "1"
+            self._repeat_count = val
+            try:
+                n = int(val)
+                if n == 1:
+                    self._set_field("val_repeat_count", "1 copy")
+                else:
+                    self._set_field(
+                        "val_repeat_count", f"{n} copies each"
+                    )
+            except ValueError:
+                self._set_field("val_repeat_count", val)
+            self._update_send_summary()
+
+        def validate(val: str):
+            if not val:
+                return None
+            try:
+                n = int(val)
+                if n < 1:
+                    return "Must be at least 1"
+                if n > 100:
+                    return "Maximum 100 copies per subscriber"
+            except ValueError:
+                return "Must be a whole number"
+
+        self.app.push_screen(InputDialog(
+            title         = "Copies Per Subscriber",
+            label         = "How many times to email each subscriber:",
+            on_submit     = on_submit,
+            initial_value = self._repeat_count,
+            hint          = (
+                "1 = send once (default)\n"
+                "2 = send twice to each subscriber\n"
+                "Max 100 copies per subscriber"
             ),
             validator     = validate,
         ))
@@ -448,6 +562,7 @@ class NewJobScreen(Screen):
             self._csv_path = path
             self._set_field("val_csv_path", path.split("/")[-1])
             self._preview_csv_path(path)
+            self._update_send_summary()
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
             filter_ext = [".csv"],
@@ -491,17 +606,6 @@ class NewJobScreen(Screen):
                 lines.append(
                     f"  [dim]... and {result.valid_count - 3} more[/dim]"
                 )
-            # Show effective send count if limit set
-            if self._send_limit:
-                try:
-                    limit = int(self._send_limit)
-                    effective = min(limit, result.valid_count)
-                    lines.append(
-                        f"  [cyan]Send limit: {effective} of "
-                        f"{result.valid_count} will be sent[/cyan]"
-                    )
-                except ValueError:
-                    pass
             self._set_preview("\n".join(lines))
         except Exception as e:
             self._set_status(f"✗ CSV error: {e}", "red")
@@ -511,6 +615,7 @@ class NewJobScreen(Screen):
             self._set_status("✗ Browse to a CSV first", "red")
             return
         self._preview_csv_path(self._csv_path)
+        self._update_send_summary()
 
     # ── Builder / Library ─────────────────────────────────────────────────────
 
@@ -586,6 +691,18 @@ class NewJobScreen(Screen):
             except ValueError:
                 errors.append("Send limit must be a whole number")
 
+        # Parse repeat count
+        repeat_count = 1
+        if self._repeat_count:
+            try:
+                repeat_count = int(self._repeat_count)
+                if repeat_count < 1:
+                    errors.append("Copies must be at least 1")
+                if repeat_count > 100:
+                    errors.append("Maximum 100 copies per subscriber")
+            except ValueError:
+                errors.append("Copies must be a whole number")
+
         try:
             max_conn = int(self._max_conn)
             if not 1 <= max_conn <= 20:
@@ -631,17 +748,29 @@ class NewJobScreen(Screen):
             append_unsubscribe = unsubscribe,
             plain_text_path    = text_path,
             send_limit         = send_limit,
+            repeat_count       = repeat_count,
         )
 
         job = self.job_manager.create_job(cfg)
         self.job_manager.start_job(job)
 
-        limit_msg = (
-            f" (limit: {send_limit})" if send_limit else ""
-        )
-        self._set_status(
-            f"✓ Job {job.job_id} launched{limit_msg}!", "green"
-        )
+        # Calculate total for confirmation
+        try:
+            result    = load_subscribers(self._csv_path)
+            effective = min(send_limit, result.valid_count) \
+                if send_limit else result.valid_count
+            total     = effective * repeat_count
+            self._set_status(
+                f"✓ Job {job.job_id} launched — "
+                f"{total} emails sending "
+                f"({effective} subscribers × {repeat_count})",
+                "green",
+            )
+        except Exception:
+            self._set_status(
+                f"✓ Job {job.job_id} launched!", "green"
+            )
+
         self.app.pop_screen()
 
     def on_button_pressed(self, event: Button.Pressed):
@@ -652,6 +781,8 @@ class NewJobScreen(Screen):
             self._browse_csv()
         elif bid == "btn_edit_send_limit":
             self._edit_send_limit()
+        elif bid == "btn_edit_repeat_count":
+            self._edit_repeat_count()
         elif bid == "btn_browse_html":
             self._browse_html()
         elif bid == "btn_browse_text":

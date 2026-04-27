@@ -1,12 +1,12 @@
 # core/job_manager.py
 # VoidSend - Multi-job queue and lifecycle manager
-# Added: send_limit — cap how many emails are sent per job
+# Added: repeat_count — send same email N times per subscriber
 
 import asyncio
 import json
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
@@ -35,11 +35,12 @@ class JobConfig:
     html_template_path: str
     subject_template:   str
     smtp_config:        SMTPConfig
-    max_connections:    int            = 5
-    delay_seconds:      float          = 0.3
-    append_unsubscribe: bool           = True
-    plain_text_path:    Optional[str]  = None
-    send_limit:         Optional[int]  = None  # None = send all
+    max_connections:    int           = 5
+    delay_seconds:      float         = 0.3
+    append_unsubscribe: bool          = True
+    plain_text_path:    Optional[str] = None
+    send_limit:         Optional[int] = None  # cap total sends
+    repeat_count:       int           = 1     # copies per subscriber
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +53,7 @@ class JobConfig:
             "append_unsubscribe": self.append_unsubscribe,
             "plain_text_path":    self.plain_text_path,
             "send_limit":         self.send_limit,
+            "repeat_count":       self.repeat_count,
         }
 
 
@@ -149,11 +151,10 @@ class Job:
                 self._notify()
                 return
 
-            # ── Apply send limit ──────────────────────────────────────────
+            # ── Apply send limit to subscriber list ───────────────────────
             if (
                 self.config.send_limit
                 and self.config.send_limit > 0
-                and self.config.send_limit < len(subscribers)
             ):
                 subscribers = subscribers[:self.config.send_limit]
 
@@ -166,7 +167,10 @@ class Job:
                     self.config.plain_text_path
                 )
 
+            # ── Build recipient list with repeat_count copies ─────────────
+            repeat = max(1, self.config.repeat_count)
             recipients = []
+
             for sub in subscribers:
                 rendered = render_email(
                     html_template       = html_template,
@@ -175,12 +179,15 @@ class Job:
                     append_unsubscribe  = self.config.append_unsubscribe,
                     plain_text_template = plain_template,
                 )
-                recipients.append({
-                    "email":   sub.email,
-                    "subject": rendered["subject"],
-                    "html":    rendered["html"],
-                    "text":    rendered["text"],
-                })
+                # Add N copies of this recipient
+                for copy_num in range(repeat):
+                    recipients.append({
+                        "email":   sub.email,
+                        "subject": rendered["subject"],
+                        "html":    rendered["html"],
+                        "text":    rendered["text"],
+                        "copy":    copy_num + 1,
+                    })
 
             self.state.total  = len(recipients)
             self.state.status = JobStatus.RUNNING
