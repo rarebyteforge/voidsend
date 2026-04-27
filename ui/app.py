@@ -1,11 +1,11 @@
 # ui/app.py
 # VoidSend - Main TUI app
-# Added: History button, persistent job history on startup
+# Redesigned: hacker green theme, two-row buttons, mobile-friendly
 
 import time
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Header, Footer, DataTable, Button, Static
 from textual.screen import Screen
 
@@ -22,6 +22,7 @@ class JobDashboard(Screen):
         Binding("n", "new_job",    "New Job"),
         Binding("l", "library",    "Library"),
         Binding("h", "history",    "History"),
+        Binding("f", "raffle",     "Raffle"),
         Binding("r", "retry_job",  "Retry"),
         Binding("c", "cancel_job", "Cancel"),
         Binding("s", "settings",   "Settings"),
@@ -36,22 +37,39 @@ class JobDashboard(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Container(
-            Static(" VoidSend — Newsletter Manager ", id="title_bar"),
-            Horizontal(
-                Static("", id="status_bar"),
-                id="top_bar",
+            # ── Title bar ─────────────────────────────────────────────────
+            Static(
+                "▓▒░ VOIDSEND — NEWSLETTER MANAGER ░▒▓",
+                id="title_bar",
             ),
+
+            # ── Status bar ────────────────────────────────────────────────
+            Static("", id="status_bar"),
+
+            # ── Job table ─────────────────────────────────────────────────
             DataTable(id="job_table"),
+
+            # ── Error/info line ───────────────────────────────────────────
             Static("", id="job_error_msg"),
+
+            # ── Button row 1: primary actions ─────────────────────────────
             Horizontal(
-                Button("+ New Job [N]", id="btn_new",      variant="success"),
-                Button("Library [L]",   id="btn_library",  variant="default"),
-                Button("History [H]",   id="btn_history",  variant="default"),
-                Button("Retry [R]",     id="btn_retry",    variant="warning"),
-                Button("Cancel [C]",    id="btn_cancel",   variant="error"),
-                Button("Settings [S]",  id="btn_settings", variant="default"),
-                id="action_bar",
+                Button("+ NEW",     id="btn_new",     variant="success"),
+                Button("LIBRARY",   id="btn_library", variant="default"),
+                Button("HISTORY",   id="btn_history", variant="default"),
+                Button("RAFFLE",    id="btn_raffle",  variant="default"),
+                id="btn_row1",
             ),
+
+            # ── Button row 2: job actions ─────────────────────────────────
+            Horizontal(
+                Button("RETRY",     id="btn_retry",    variant="default"),
+                Button("CANCEL",    id="btn_cancel",   variant="default"),
+                Button("SETTINGS",  id="btn_settings", variant="default"),
+                Button("QUIT",      id="btn_quit",     variant="default"),
+                id="btn_row2",
+            ),
+
             id="main_container",
         )
         yield Footer()
@@ -59,9 +77,9 @@ class JobDashboard(Screen):
     def on_mount(self):
         table = self.query_one(DataTable)
         table.add_columns(
-            "Job ID", "Name", "Status",
-            "Progress", "Sent", "Failed",
-            "Elapsed", "Started",
+            "ID", "NAME", "STATUS",
+            "PROG", "SENT", "FAIL",
+            "TIME", "START",
         )
         self.set_interval(1.0, self.refresh_table)
 
@@ -69,27 +87,36 @@ class JobDashboard(Screen):
         table = self.query_one(DataTable)
         table.clear()
 
+        status_map = {
+            JobStatus.RUNNING:   "▶ RUN",
+            JobStatus.COMPLETED: "✓ DONE",
+            JobStatus.CANCELLED: "⏹ STOP",
+            JobStatus.FAILED:    "✗ FAIL",
+            JobStatus.PENDING:   "⏳ WAIT",
+            JobStatus.PAUSED:    "⏸ PAUSE",
+        }
+
         status_colors = {
-            JobStatus.RUNNING:   "[green]▶ Running[/]",
-            JobStatus.COMPLETED: "[blue]✓ Done[/]",
-            JobStatus.CANCELLED: "[yellow]⏹ Cancelled[/]",
-            JobStatus.FAILED:    "[red]✗ Failed[/]",
-            JobStatus.PENDING:   "[dim]⏳ Pending[/]",
-            JobStatus.PAUSED:    "[yellow]⏸ Paused[/]",
+            JobStatus.RUNNING:   "[bold green]▶ RUN[/]",
+            JobStatus.COMPLETED: "[bold cyan]✓ DONE[/]",
+            JobStatus.CANCELLED: "[yellow]⏹ STOP[/]",
+            JobStatus.FAILED:    "[bold red]✗ FAIL[/]",
+            JobStatus.PENDING:   "[dim]⏳ WAIT[/]",
+            JobStatus.PAUSED:    "[yellow]⏸ PAUSE[/]",
         }
 
         for state in self.job_manager.all_states():
             elapsed    = f"{int(state.elapsed_seconds)}s"
             progress   = f"{state.progress_pct:.0f}%"
             started    = time.strftime(
-                "%H:%M:%S", time.localtime(state.start_time)
+                "%H:%M", time.localtime(state.start_time)
             )
             status_str = status_colors.get(
                 state.status, state.status.value
             )
             table.add_row(
                 state.job_id,
-                state.name[:24],
+                state.name[:16],
                 status_str,
                 progress,
                 str(state.sent),
@@ -103,10 +130,11 @@ class JobDashboard(Screen):
         hist   = len(self.job_manager.get_history())
 
         self.query_one("#status_bar", Static).update(
-            f"  Jobs: {total} active | {hist} in history"
+            f"  [green]●[/green] ACTIVE: [bold green]{active}[/bold green]"
+            f"   [cyan]▸[/cyan] SESSION: {total}"
+            f"   [dim]▸[/dim] HISTORY: {hist}"
         )
 
-        # Show error for selected failed job
         state = self._selected_state()
         if (
             state
@@ -114,7 +142,7 @@ class JobDashboard(Screen):
             and state.error_message
         ):
             self.query_one("#job_error_msg", Static).update(
-                f"[red]✗ {state.error_message[:80]}[/red]"
+                f"[red]  ✗ ERR › {state.error_message[:72]}[/red]"
             )
         else:
             self.query_one("#job_error_msg", Static).update("")
@@ -143,11 +171,20 @@ class JobDashboard(Screen):
             HistoryScreen(self.job_manager, self.smtp_config)
         )
 
+    def action_raffle(self):
+        from ui.raffle_screen import RaffleScreen
+        self.app.push_screen(
+            RaffleScreen(
+                smtp_config = self.smtp_config,
+                job_manager = self.job_manager,
+            )
+        )
+
     def action_retry_job(self):
         state = self._selected_state()
         if not state:
             self.query_one("#job_error_msg", Static).update(
-                "[yellow]Select a job to retry[/yellow]"
+                "[yellow]  ⚠ Select a job first[/yellow]"
             )
             return
         if state.status not in (
@@ -156,7 +193,7 @@ class JobDashboard(Screen):
             JobStatus.COMPLETED,
         ):
             self.query_one("#job_error_msg", Static).update(
-                "[yellow]Only failed, cancelled or completed jobs can be retried[/yellow]"
+                "[yellow]  ⚠ Only failed/cancelled/done jobs can retry[/yellow]"
             )
             return
 
@@ -167,7 +204,7 @@ class JobDashboard(Screen):
         new_job = self.job_manager.create_job(original_job.config)
         self.job_manager.start_job(new_job)
         self.query_one("#job_error_msg", Static).update(
-            f"[green]✓ Retrying as job {new_job.job_id}[/green]"
+            f"[green]  ✓ Retry launched › {new_job.job_id}[/green]"
         )
 
     def action_cancel_job(self):
@@ -185,51 +222,163 @@ class JobDashboard(Screen):
             self.action_library()
         elif event.button.id == "btn_history":
             self.action_history()
+        elif event.button.id == "btn_raffle":
+            self.action_raffle()
         elif event.button.id == "btn_retry":
             self.action_retry_job()
         elif event.button.id == "btn_cancel":
             self.action_cancel_job()
         elif event.button.id == "btn_settings":
             self.action_settings()
+        elif event.button.id == "btn_quit":
+            self.app.exit()
 
 
 class VoidSendApp(App):
 
     CSS = """
+    /* ── Global theme ─────────────────────────────────────────────── */
+    Screen {
+        background: #0a0e0a;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────── */
+    Header {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-style: bold;
+    }
+
+    Footer {
+        background: #0d1a0d;
+        color: #1a4d1a;
+    }
+
+    /* ── Main container ───────────────────────────────────────────── */
     #main_container {
         height: 1fr;
-        padding: 1 2;
+        padding: 0 1;
+        background: #0a0e0a;
     }
+
+    /* ── Title bar ────────────────────────────────────────────────── */
     #title_bar {
-        background: $accent;
-        color: $text;
+        background: #0d1a0d;
+        color: #00ff41;
         text-align: center;
         padding: 0 1;
         text-style: bold;
+        border-bottom: solid #1a4d1a;
     }
-    #top_bar {
+
+    /* ── Status bar ───────────────────────────────────────────────── */
+    #status_bar {
         height: 1;
-        margin-bottom: 1;
+        padding: 0 1;
+        background: #080c08;
+        color: #00cc33;
+        border-bottom: solid #0d1a0d;
     }
+
+    /* ── Job table ────────────────────────────────────────────────── */
     #job_table {
         height: 1fr;
-        border: solid $accent;
+        border: solid #1a4d1a;
+        background: #080c08;
+        color: #00cc33;
+        scrollbar-color: #1a4d1a;
+        scrollbar-background: #080c08;
     }
+
+    DataTable > .datatable--header {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-style: bold;
+    }
+
+    DataTable > .datatable--cursor {
+        background: #0d3d0d;
+        color: #00ff41;
+    }
+
+    DataTable > .datatable--odd-row {
+        background: #080c08;
+    }
+
+    DataTable > .datatable--even-row {
+        background: #090d09;
+    }
+
+    /* ── Error message ────────────────────────────────────────────── */
     #job_error_msg {
         height: 1;
-        margin-top: 1;
         padding: 0 1;
+        background: #0a0e0a;
     }
-    #action_bar {
+
+    /* ── Button rows ──────────────────────────────────────────────── */
+    #btn_row1 {
         height: 3;
         margin-top: 1;
-        align: center middle;
+        background: #0a0e0a;
     }
-    #action_bar Button {
-        margin: 0 1;
-        min-width: 12;
+
+    #btn_row2 {
+        height: 3;
+        margin-top: 0;
+        background: #0a0e0a;
+    }
+
+    #btn_row1 Button {
+        width: 1fr;
+        height: 3;
+        margin: 0 0 0 1;
+        background: #0d1a0d;
+        color: #00cc33;
+        border: solid #1a4d1a;
+        text-style: bold;
+    }
+
+    #btn_row2 Button {
+        width: 1fr;
+        height: 3;
+        margin: 0 0 0 1;
+        background: #080c08;
+        color: #1a8c1a;
+        border: solid #0d2d0d;
+        text-style: bold;
+    }
+
+    #btn_new {
+        background: #003300 !important;
+        color: #00ff41 !important;
+        border: solid #00cc33 !important;
+    }
+
+    #btn_row1 Button:hover,
+    #btn_row2 Button:hover {
+        background: #0d3d0d;
+        color: #00ff41;
+        border: solid #00cc33;
+    }
+
+    #btn_retry {
+        color: #ffaa00 !important;
+        border: solid #664400 !important;
+    }
+
+    #btn_cancel {
+        color: #cc3300 !important;
+        border: solid #441100 !important;
+    }
+
+    #btn_quit {
+        color: #666666 !important;
+        border: solid #333333 !important;
     }
     """
+
+    TITLE = "VOIDSEND"
 
     def __init__(
         self,
@@ -238,10 +387,10 @@ class VoidSendApp(App):
         **kwargs
     ):
         super().__init__(**kwargs)
-        self.smtp_config         = smtp_config
-        self.notification_cfg    = notification_cfg or NotificationConfig()
-        self._config_passphrase  = ""
-        self.job_manager         = JobManager(
+        self.smtp_config        = smtp_config
+        self.notification_cfg   = notification_cfg or NotificationConfig()
+        self._config_passphrase = ""
+        self.job_manager        = JobManager(
             on_update=self._on_job_update
         )
 

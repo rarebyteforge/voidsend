@@ -1,6 +1,6 @@
 # ui/new_job_screen.py
 # VoidSend - New job creation form
-# Keyboard fix: all text inputs use InputDialog for Termux reliability
+# Added: send_limit field to cap emails per job
 
 from pathlib import Path
 from textual.app import ComposeResult
@@ -85,18 +85,6 @@ class NewJobScreen(Screen):
         margin-left: 1;
         height: 3;
     }
-    .path_row {
-        height: auto;
-        margin-bottom: 1;
-    }
-    .path_row Input {
-        width: 1fr;
-    }
-    .path_row Button {
-        width: 10;
-        min-width: 10;
-        margin-left: 1;
-    }
     Label {
         margin-top: 1;
     }
@@ -132,14 +120,15 @@ class NewJobScreen(Screen):
         self._generated: Optional[GeneratedContent] = None
         self._source      = "files"
 
-        # Store values since we use dialog instead of live Input
-        self._job_name  = ""
-        self._csv_path  = ""
-        self._html_path = ""
-        self._text_path = ""
-        self._subject   = ""
-        self._max_conn  = "5"
-        self._delay     = "0.3"
+        # Field values
+        self._job_name   = ""
+        self._csv_path   = ""
+        self._html_path  = ""
+        self._text_path  = ""
+        self._subject    = ""
+        self._max_conn   = "5"
+        self._delay      = "0.3"
+        self._send_limit = ""   # empty = send all
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -151,7 +140,7 @@ class NewJobScreen(Screen):
                 Label("Job Name"),
                 Horizontal(
                     Static(
-                        "[dim]Tap edit to enter job name[/dim]",
+                        "[dim]tap edit to enter job name[/dim]",
                         id="val_job_name",
                     ),
                     Button("edit", id="btn_edit_job_name", variant="default"),
@@ -162,13 +151,24 @@ class NewJobScreen(Screen):
                 Label("Subscriber CSV"),
                 Horizontal(
                     Static(
-                        "[dim]Tap browse to select CSV[/dim]",
+                        "[dim]tap browse to select CSV[/dim]",
                         id="val_csv_path",
                     ),
                     Button("browse", id="btn_browse_csv", variant="default"),
                     classes="field_row",
                 ),
                 Static("", id="preview_info"),
+
+                # ── Send Limit ────────────────────────────────────────────
+                Label("Send Limit (optional — leave blank to send all)"),
+                Horizontal(
+                    Static(
+                        "[dim]all subscribers[/dim]",
+                        id="val_send_limit",
+                    ),
+                    Button("edit", id="btn_edit_send_limit", variant="default"),
+                    classes="field_row",
+                ),
 
                 # ── Content Source ────────────────────────────────────────
                 Label("Content Source"),
@@ -182,7 +182,7 @@ class NewJobScreen(Screen):
                 Label("HTML Template", id="lbl_html"),
                 Horizontal(
                     Static(
-                        "[dim]Tap browse to select HTML template[/dim]",
+                        "[dim]tap browse to select HTML template[/dim]",
                         id="val_html_path",
                     ),
                     Button("browse", id="btn_browse_html", variant="default"),
@@ -192,7 +192,7 @@ class NewJobScreen(Screen):
                 Label("Plain Text Template (optional)", id="lbl_text"),
                 Horizontal(
                     Static(
-                        "[dim]Tap browse (optional)[/dim]",
+                        "[dim]tap browse (optional)[/dim]",
                         id="val_text_path",
                     ),
                     Button("browse", id="btn_browse_text", variant="default"),
@@ -205,7 +205,7 @@ class NewJobScreen(Screen):
                 ),
                 Horizontal(
                     Static(
-                        "[dim]Tap edit to enter subject[/dim]",
+                        "[dim]tap edit to enter subject[/dim]",
                         id="val_subject",
                     ),
                     Button("edit", id="btn_edit_subject", variant="default"),
@@ -244,11 +244,14 @@ class NewJobScreen(Screen):
                         ),
                     ),
                     Vertical(
-                        Label("Max Conn"),
+                        Label("Max Connections"),
                         Horizontal(
                             Static("5", id="val_max_conn"),
-                            Button("edit", id="btn_edit_max_conn",
-                                   variant="default"),
+                            Button(
+                                "edit",
+                                id="btn_edit_max_conn",
+                                variant="default",
+                            ),
                             classes="field_row",
                         ),
                     ),
@@ -256,8 +259,11 @@ class NewJobScreen(Screen):
                         Label("Delay (sec)"),
                         Horizontal(
                             Static("0.3", id="val_delay"),
-                            Button("edit", id="btn_edit_delay",
-                                   variant="default"),
+                            Button(
+                                "edit",
+                                id="btn_edit_delay",
+                                variant="default",
+                            ),
                             classes="field_row",
                         ),
                     ),
@@ -318,14 +324,10 @@ class NewJobScreen(Screen):
     def _set_preview(self, msg: str):
         self.query_one("#preview_info", Static).update(msg)
 
-    def _set_field(self, widget_id: str, value: str, dim_if_empty: bool = True):
-        """Update a display Static with the current value."""
+    def _set_field(self, widget_id: str, value: str):
         try:
             w = self.query_one(f"#{widget_id}", Static)
-            if value:
-                w.update(value)
-            elif dim_if_empty:
-                w.update("[dim]not set[/dim]")
+            w.update(value if value else "[dim]not set[/dim]")
         except Exception:
             pass
 
@@ -355,6 +357,45 @@ class NewJobScreen(Screen):
             on_submit     = on_submit,
             initial_value = self._subject,
             hint          = "Supports {{name}}, {{email}} placeholders",
+        ))
+
+    def _edit_send_limit(self):
+        from ui.input_dialog import InputDialog
+        def on_submit(val: str):
+            val = val.strip()
+            self._send_limit = val
+            if val:
+                self._set_field(
+                    "val_send_limit",
+                    f"first {val} subscribers",
+                )
+            else:
+                try:
+                    self.query_one(
+                        "#val_send_limit", Static
+                    ).update("[dim]all subscribers[/dim]")
+                except Exception:
+                    pass
+        def validate(val: str):
+            if not val:
+                return None  # blank = send all, valid
+            try:
+                n = int(val)
+                if n < 1:
+                    return "Must be at least 1"
+            except ValueError:
+                return "Must be a whole number or leave blank"
+        self.app.push_screen(InputDialog(
+            title         = "Send Limit",
+            label         = "Max emails to send (leave blank for all):",
+            on_submit     = on_submit,
+            initial_value = self._send_limit,
+            hint          = (
+                "e.g. 100 sends to first 100 subscribers only.\n"
+                "Useful for daily limits or staged sends.\n"
+                "Leave blank to send to entire list."
+            ),
+            validator     = validate,
         ))
 
     def _edit_max_conn(self):
@@ -405,9 +446,7 @@ class NewJobScreen(Screen):
         from ui.file_browser import FileBrowserScreen
         def on_picked(path: str):
             self._csv_path = path
-            # Truncate display path for readability
-            display = path.split("/")[-1]
-            self._set_field("val_csv_path", display)
+            self._set_field("val_csv_path", path.split("/")[-1])
             self._preview_csv_path(path)
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
@@ -419,8 +458,7 @@ class NewJobScreen(Screen):
         from ui.file_browser import FileBrowserScreen
         def on_picked(path: str):
             self._html_path = path
-            display = path.split("/")[-1]
-            self._set_field("val_html_path", display)
+            self._set_field("val_html_path", path.split("/")[-1])
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
             filter_ext = [".html", ".htm"],
@@ -431,8 +469,7 @@ class NewJobScreen(Screen):
         from ui.file_browser import FileBrowserScreen
         def on_picked(path: str):
             self._text_path = path
-            display = path.split("/")[-1]
-            self._set_field("val_text_path", display)
+            self._set_field("val_text_path", path.split("/")[-1])
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
             filter_ext = [".txt"],
@@ -454,6 +491,17 @@ class NewJobScreen(Screen):
                 lines.append(
                     f"  [dim]... and {result.valid_count - 3} more[/dim]"
                 )
+            # Show effective send count if limit set
+            if self._send_limit:
+                try:
+                    limit = int(self._send_limit)
+                    effective = min(limit, result.valid_count)
+                    lines.append(
+                        f"  [cyan]Send limit: {effective} of "
+                        f"{result.valid_count} will be sent[/cyan]"
+                    )
+                except ValueError:
+                    pass
             self._set_preview("\n".join(lines))
         except Exception as e:
             self._set_status(f"✗ CSV error: {e}", "red")
@@ -474,8 +522,11 @@ class NewJobScreen(Screen):
         ):
             self._generated = generated
             try:
-                self.query_one("#generated_status", Static).update(
-                    f"[green]✓ Content ready: \"{fields.headline}\"[/green]"
+                self.query_one(
+                    "#generated_status", Static
+                ).update(
+                    f"[green]✓ Content ready: "
+                    f"\"{fields.headline}\"[/green]"
                 )
             except Exception:
                 pass
@@ -489,8 +540,11 @@ class NewJobScreen(Screen):
         ):
             self._generated = generated
             try:
-                self.query_one("#generated_status", Static).update(
-                    f"[green]✓ Template: \"{fields.template_name or fields.headline}\"[/green]"
+                self.query_one(
+                    "#generated_status", Static
+                ).update(
+                    f"[green]✓ Template: "
+                    f"\"{fields.template_name or fields.headline}\"[/green]"
                 )
             except Exception:
                 pass
@@ -521,6 +575,16 @@ class NewJobScreen(Screen):
                 errors.append(
                     "No content loaded — use Builder or Library"
                 )
+
+        # Parse send limit
+        send_limit = None
+        if self._send_limit:
+            try:
+                send_limit = int(self._send_limit)
+                if send_limit < 1:
+                    errors.append("Send limit must be at least 1")
+            except ValueError:
+                errors.append("Send limit must be a whole number")
 
         try:
             max_conn = int(self._max_conn)
@@ -566,11 +630,18 @@ class NewJobScreen(Screen):
             delay_seconds      = delay,
             append_unsubscribe = unsubscribe,
             plain_text_path    = text_path,
+            send_limit         = send_limit,
         )
 
         job = self.job_manager.create_job(cfg)
         self.job_manager.start_job(job)
-        self._set_status(f"✓ Job {job.job_id} launched!", "green")
+
+        limit_msg = (
+            f" (limit: {send_limit})" if send_limit else ""
+        )
+        self._set_status(
+            f"✓ Job {job.job_id} launched{limit_msg}!", "green"
+        )
         self.app.pop_screen()
 
     def on_button_pressed(self, event: Button.Pressed):
@@ -579,6 +650,8 @@ class NewJobScreen(Screen):
             self._edit_job_name()
         elif bid == "btn_browse_csv":
             self._browse_csv()
+        elif bid == "btn_edit_send_limit":
+            self._edit_send_limit()
         elif bid == "btn_browse_html":
             self._browse_html()
         elif bid == "btn_browse_text":

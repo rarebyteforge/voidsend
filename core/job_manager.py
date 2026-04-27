@@ -1,6 +1,6 @@
 # core/job_manager.py
 # VoidSend - Multi-job queue and lifecycle manager
-# Added: persistent job history (JSON), rerun, clear history
+# Added: send_limit — cap how many emails are sent per job
 
 import asyncio
 import json
@@ -35,13 +35,13 @@ class JobConfig:
     html_template_path: str
     subject_template:   str
     smtp_config:        SMTPConfig
-    max_connections:    int   = 5
-    delay_seconds:      float = 0.3
-    append_unsubscribe: bool  = True
-    plain_text_path:    Optional[str] = None
+    max_connections:    int            = 5
+    delay_seconds:      float          = 0.3
+    append_unsubscribe: bool           = True
+    plain_text_path:    Optional[str]  = None
+    send_limit:         Optional[int]  = None  # None = send all
 
     def to_dict(self) -> dict:
-        """Serialize config for history (excludes smtp credentials)."""
         return {
             "name":               self.name,
             "csv_path":           self.csv_path,
@@ -51,6 +51,7 @@ class JobConfig:
             "delay_seconds":      self.delay_seconds,
             "append_unsubscribe": self.append_unsubscribe,
             "plain_text_path":    self.plain_text_path,
+            "send_limit":         self.send_limit,
         }
 
 
@@ -60,14 +61,12 @@ class JobState:
     name:          str
     status:        JobStatus
     total:         int
-    sent:          int   = 0
-    failed:        int   = 0
-    start_time:    float = field(default_factory=time.time)
+    sent:          int            = 0
+    failed:        int            = 0
+    start_time:    float          = field(default_factory=time.time)
     end_time:      Optional[float] = None
-    error_message: Optional[str]   = None
-
-    # Serialized config for history persistence
-    config_dict:   dict = field(default_factory=dict)
+    error_message: Optional[str]  = None
+    config_dict:   dict           = field(default_factory=dict)
 
     @property
     def elapsed_seconds(self) -> float:
@@ -120,9 +119,9 @@ class Job:
         config:    JobConfig,
         on_update: Optional[Callable[[JobState], None]] = None,
     ):
-        self.job_id    = str(uuid.uuid4())[:8].upper()
-        self.config    = config
-        self.on_update = on_update
+        self.job_id      = str(uuid.uuid4())[:8].upper()
+        self.config      = config
+        self.on_update   = on_update
         self._stop_event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         self.state = JobState(
@@ -145,24 +144,36 @@ class Job:
 
             if not subscribers:
                 self.state.status        = JobStatus.FAILED
-                self.state.error_message = "No valid subscribers found in CSV"
+                self.state.error_message = "No valid subscribers in CSV"
                 self.state.end_time      = time.time()
                 self._notify()
                 return
 
-            html_template  = load_template_file(self.config.html_template_path)
+            # ── Apply send limit ──────────────────────────────────────────
+            if (
+                self.config.send_limit
+                and self.config.send_limit > 0
+                and self.config.send_limit < len(subscribers)
+            ):
+                subscribers = subscribers[:self.config.send_limit]
+
+            html_template  = load_template_file(
+                self.config.html_template_path
+            )
             plain_template = None
             if self.config.plain_text_path:
-                plain_template = load_template_file(self.config.plain_text_path)
+                plain_template = load_template_file(
+                    self.config.plain_text_path
+                )
 
             recipients = []
             for sub in subscribers:
                 rendered = render_email(
-                    html_template      = html_template,
-                    subject_template   = self.config.subject_template,
-                    variables          = sub.to_template_vars(),
-                    append_unsubscribe = self.config.append_unsubscribe,
-                    plain_text_template= plain_template,
+                    html_template       = html_template,
+                    subject_template    = self.config.subject_template,
+                    variables           = sub.to_template_vars(),
+                    append_unsubscribe  = self.config.append_unsubscribe,
+                    plain_text_template = plain_template,
                 )
                 recipients.append({
                     "email":   sub.email,
@@ -219,34 +230,27 @@ class Job:
 
 
 class JobManager:
-    """Manages concurrent jobs with persistent history."""
 
     def __init__(
         self,
         on_update: Optional[Callable[[JobState], None]] = None,
     ):
-        self._jobs:     dict[str, Job]      = {}
-        self._history:  list[JobState]      = []
-        self.on_update  = on_update
+        self._jobs:    dict[str, Job] = {}
+        self._history: list[JobState] = []
+        self.on_update = on_update
         self._load_history()
 
-    # ── History persistence ───────────────────────────────────────────────────
-
     def _load_history(self):
-        """Load past job states from disk."""
         if not HISTORY_FILE.exists():
             return
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self._history = [
-                JobState.from_dict(d) for d in data
-            ]
+            self._history = [JobState.from_dict(d) for d in data]
         except Exception:
             self._history = []
 
     def _save_history(self):
-        """Persist all terminal job states to disk."""
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         terminal = [
             s for s in self.all_states()
@@ -256,21 +260,18 @@ class JobManager:
                 JobStatus.CANCELLED,
             )
         ]
-        # Merge with existing history, newest first, cap at 100
         existing_ids = {s.job_id for s in self._history}
         for state in terminal:
             if state.job_id not in existing_ids:
                 self._history.insert(0, state)
                 existing_ids.add(state.job_id)
             else:
-                # Update existing entry
                 for i, h in enumerate(self._history):
                     if h.job_id == state.job_id:
                         self._history[i] = state
                         break
 
         self._history = self._history[:100]
-
         try:
             with open(HISTORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(
@@ -281,12 +282,9 @@ class JobManager:
             pass
 
     def clear_history(self):
-        """Clear all persisted job history."""
         self._history = []
         if HISTORY_FILE.exists():
             HISTORY_FILE.unlink()
-
-    # ── Job lifecycle ─────────────────────────────────────────────────────────
 
     def create_job(self, config: JobConfig) -> Job:
         job = Job(config=config, on_update=self._on_job_update)
@@ -296,7 +294,6 @@ class JobManager:
     def _on_job_update(self, state: JobState):
         if self.on_update:
             self.on_update(state)
-        # Save history when job reaches terminal state
         if state.status in (
             JobStatus.COMPLETED,
             JobStatus.FAILED,
@@ -321,9 +318,13 @@ class JobManager:
         return [j.state for j in self._jobs.values()]
 
     def active_count(self) -> int:
-        return sum(1 for j in self._jobs.values() if j.state.is_active)
+        return sum(
+            1 for j in self._jobs.values() if j.state.is_active
+        )
 
     def get_history(self) -> list[JobState]:
-        """Return persisted history, excluding currently active jobs."""
         active_ids = {j.job_id for j in self._jobs.values()}
-        return [s for s in self._history if s.job_id not in active_ids]
+        return [
+            s for s in self._history
+            if s.job_id not in active_ids
+        ]
