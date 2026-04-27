@@ -1,5 +1,6 @@
 # ui/app.py
-# VoidSend - Main Textual TUI application
+# VoidSend - Main TUI app
+# Added: retry failed jobs from dashboard
 
 import time
 from textual.app import App, ComposeResult
@@ -20,7 +21,8 @@ class JobDashboard(Screen):
     BINDINGS = [
         Binding("n", "new_job",    "New Job"),
         Binding("l", "library",    "Library"),
-        Binding("c", "cancel_job", "Cancel Job"),
+        Binding("r", "retry_job",  "Retry"),
+        Binding("c", "cancel_job", "Cancel"),
         Binding("s", "settings",   "Settings"),
         Binding("q", "quit",       "Quit"),
     ]
@@ -39,10 +41,12 @@ class JobDashboard(Screen):
                 id="top_bar",
             ),
             DataTable(id="job_table"),
+            Static("", id="job_error_msg"),
             Horizontal(
                 Button("+ New Job [N]",  id="btn_new",      variant="success"),
                 Button("Library [L]",    id="btn_library",  variant="default"),
-                Button("Cancel Job [C]", id="btn_cancel",   variant="error"),
+                Button("Retry [R]",      id="btn_retry",    variant="warning"),
+                Button("Cancel [C]",     id="btn_cancel",   variant="error"),
                 Button("Settings [S]",   id="btn_settings", variant="default"),
                 id="action_bar",
             ),
@@ -53,14 +57,9 @@ class JobDashboard(Screen):
     def on_mount(self):
         table = self.query_one(DataTable)
         table.add_columns(
-            "Job ID",
-            "Name",
-            "Status",
-            "Progress",
-            "Sent",
-            "Failed",
-            "Elapsed",
-            "Started",
+            "Job ID", "Name", "Status",
+            "Progress", "Sent", "Failed",
+            "Elapsed", "Started",
         )
         self.set_interval(1.0, self.refresh_table)
 
@@ -80,18 +79,14 @@ class JobDashboard(Screen):
         for state in self.job_manager.all_states():
             elapsed    = f"{int(state.elapsed_seconds)}s"
             progress   = f"{state.progress_pct:.0f}%"
-            started    = time.strftime("%H:%M:%S", time.localtime(state.start_time))
+            started    = time.strftime(
+                "%H:%M:%S", time.localtime(state.start_time)
+            )
             status_str = status_colors.get(state.status, state.status.value)
-
             table.add_row(
-                state.job_id,
-                state.name[:28],
-                status_str,
-                progress,
-                str(state.sent),
-                str(state.failed),
-                elapsed,
-                started,
+                state.job_id, state.name[:24], status_str,
+                progress, str(state.sent), str(state.failed),
+                elapsed, started,
             )
 
         active = self.job_manager.active_count()
@@ -99,6 +94,24 @@ class JobDashboard(Screen):
         self.query_one("#status_bar", Static).update(
             f"  Jobs: {total} total | {active} active"
         )
+
+        # Show error message for selected failed job
+        state = self._selected_state()
+        if state and state.status == JobStatus.FAILED and state.error_message:
+            self.query_one("#job_error_msg", Static).update(
+                f"[red]✗ Error: {state.error_message[:80]}[/red]"
+            )
+        else:
+            self.query_one("#job_error_msg", Static).update("")
+
+    def _selected_state(self) -> JobState | None:
+        table = self.query_one(DataTable)
+        if table.cursor_row is None:
+            return None
+        states = self.job_manager.all_states()
+        if table.cursor_row < len(states):
+            return states[table.cursor_row]
+        return None
 
     def action_new_job(self):
         self.app.push_screen(
@@ -109,13 +122,39 @@ class JobDashboard(Screen):
         from ui.library_screen import LibraryScreen
         self.app.push_screen(LibraryScreen())
 
+    def action_retry_job(self):
+        state = self._selected_state()
+        if not state:
+            self.query_one("#job_error_msg", Static).update(
+                "[yellow]Select a job to retry[/yellow]"
+            )
+            return
+        if state.status not in (
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+            JobStatus.COMPLETED,
+        ):
+            self.query_one("#job_error_msg", Static).update(
+                "[yellow]Only failed, cancelled or completed jobs can be retried[/yellow]"
+            )
+            return
+
+        # Get original job config and re-run it
+        original_job = self.job_manager.get_job(state.job_id)
+        if not original_job:
+            return
+
+        import asyncio
+        new_job = self.job_manager.create_job(original_job.config)
+        self.job_manager.start_job(new_job)
+        self.query_one("#job_error_msg", Static).update(
+            f"[green]✓ Retrying as job {new_job.job_id}[/green]"
+        )
+
     def action_cancel_job(self):
-        table = self.query_one(DataTable)
-        if table.cursor_row is not None:
-            states = self.job_manager.all_states()
-            if table.cursor_row < len(states):
-                job_id = states[table.cursor_row].job_id
-                self.job_manager.cancel_job(job_id)
+        state = self._selected_state()
+        if state:
+            self.job_manager.cancel_job(state.job_id)
 
     def action_settings(self):
         self.app.push_screen(SetupScreen())
@@ -125,6 +164,8 @@ class JobDashboard(Screen):
             self.action_new_job()
         elif event.button.id == "btn_library":
             self.action_library()
+        elif event.button.id == "btn_retry":
+            self.action_retry_job()
         elif event.button.id == "btn_cancel":
             self.action_cancel_job()
         elif event.button.id == "btn_settings":
@@ -153,6 +194,11 @@ class VoidSendApp(App):
         height: 1fr;
         border: solid $accent;
     }
+    #job_error_msg {
+        height: 1;
+        margin-top: 1;
+        padding: 0 1;
+    }
     #action_bar {
         height: 3;
         margin-top: 1;
@@ -160,20 +206,22 @@ class VoidSendApp(App):
     }
     #action_bar Button {
         margin: 0 1;
-        min-width: 18;
+        min-width: 14;
     }
     """
 
-    def __init__(self, smtp_config=None, **kwargs):
+    def __init__(
+        self,
+        smtp_config=None,
+        notification_cfg=None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.smtp_config      = smtp_config
-        self.notification_cfg = NotificationConfig()
-        self.job_manager      = JobManager(
-            on_update=self._on_job_update
-        )
+        self.notification_cfg = notification_cfg or NotificationConfig()
+        self.job_manager      = JobManager(on_update=self._on_job_update)
 
     def _on_job_update(self, state: JobState):
-        # Refresh dashboard
         try:
             screen = self.screen
             if isinstance(screen, JobDashboard):
@@ -181,7 +229,6 @@ class VoidSendApp(App):
         except Exception:
             pass
 
-        # Fire notifications on terminal states
         if state.status in (
             JobStatus.COMPLETED,
             JobStatus.FAILED,
@@ -204,16 +251,15 @@ class VoidSendApp(App):
             except Exception:
                 pass
 
-        # Milestone notifications (every 25%)
         if (
             self.notification_cfg.enabled
             and self.notification_cfg.milestones
             and state.status == JobStatus.RUNNING
         ):
+            import asyncio
             pct = state.progress_pct
             for milestone in (25, 50, 75):
                 if abs(pct - milestone) < 1.0:
-                    import asyncio
                     try:
                         asyncio.ensure_future(
                             notify_job_event(

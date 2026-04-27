@@ -1,0 +1,195 @@
+# ui/file_browser.py
+# VoidSend - Reusable file browser screen
+# Works on Termux and desktop without any external dependencies.
+
+from pathlib import Path
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import Screen
+from textual.widgets import (
+    Button, Header, Footer,
+    DataTable, Static, Input, Label
+)
+from typing import Optional, Callable
+
+
+class FileBrowserScreen(Screen):
+    """
+    Reusable file browser.
+    on_select(path: str) called when user confirms a file.
+    filter_ext: list of extensions to show e.g. ['.csv', '.html']
+    """
+
+    BINDINGS = [
+        Binding("escape",     "cancel",    "Cancel"),
+        Binding("backspace",  "go_up",     "Up"),
+        Binding("enter",      "select",    "Open/Select"),
+        Binding("h",          "go_home",   "Home"),
+    ]
+
+    CSS = """
+    #browser_container {
+        height: 1fr;
+        padding: 1 2;
+    }
+    #browser_title {
+        background: $accent;
+        color: $text;
+        text-align: center;
+        padding: 1;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #current_path {
+        color: $accent;
+        margin-bottom: 1;
+        padding: 0 1;
+    }
+    #file_table {
+        height: 1fr;
+        border: solid $accent;
+    }
+    #path_input_row {
+        height: auto;
+        margin-top: 1;
+    }
+    #path_input_row Label {
+        margin-top: 1;
+    }
+    #manual_path {
+        margin-bottom: 1;
+    }
+    #btn_row {
+        height: auto;
+        margin-top: 1;
+        padding: 1 0;
+    }
+    #btn_row Button {
+        margin: 0 1;
+        min-width: 16;
+        height: 3;
+    }
+    #browser_status {
+        min-height: 1;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(
+        self,
+        on_select: Callable[[str], None],
+        start_dir: Optional[str] = None,
+        filter_ext: Optional[list[str]] = None,
+        title: str = "Select File",
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.on_select  = on_select
+        self.filter_ext = [e.lower() for e in (filter_ext or [])]
+        self.title      = title
+        self._entries: list[dict] = []
+
+        # Start in provided dir, home, or storage
+        if start_dir and Path(start_dir).exists():
+            self._cwd = Path(start_dir)
+        else:
+            # Termux common locations
+            candidates = [
+                Path("/storage/emulated/0"),  # Android internal storage
+                Path.home() / "storage" / "shared",
+                Path.home() / "storage",
+                Path.home(),
+            ]
+            self._cwd = next(
+                (p for p in candidates if p.exists()),
+                Path.home()
+            )
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static(f"📂  {self.title}", id="browser_title"),
+            Static("", id="current_path"),
+            DataTable(id="file_table"),
+            Vertical(
+                Label("Or type path manually:"),
+                Input(
+                    placeholder="/path/to/file.csv",
+                    id="manual_path",
+                ),
+                id="path_input_row",
+            ),
+            Static("", id="browser_status"),
+            Horizontal(
+                Button("↑ Up",       id="btn_up",     variant="default"),
+                Button("🏠 Home",    id="btn_home",   variant="default"),
+                Button("✓ Select",   id="btn_select", variant="success"),
+                Button("Cancel",     id="btn_cancel", variant="error"),
+                id="btn_row",
+            ),
+            id="browser_container",
+        )
+        yield Footer()
+
+    def on_mount(self):
+        table = self.query_one(DataTable)
+        table.add_columns("", "Name", "Size", "Type")
+        self._load_directory(self._cwd)
+
+    def _load_directory(self, path: Path):
+        self._cwd = path
+        table     = self.query_one(DataTable)
+        table.clear()
+        self._entries = []
+
+        self.query_one("#current_path", Static).update(
+            f"📂 {self._cwd}"
+        )
+
+        try:
+            items = sorted(
+                self._cwd.iterdir(),
+                key=lambda p: (not p.is_dir(), p.name.lower())
+            )
+        except PermissionError:
+            self._set_status("✗ Permission denied", "red")
+            return
+        except Exception as e:
+            self._set_status(f"✗ Error: {e}", "red")
+            return
+
+        # Add parent dir entry
+        if self._cwd.parent != self._cwd:
+            self._entries.append({
+                "path":   str(self._cwd.parent),
+                "name":   "..",
+                "is_dir": True,
+                "size":   "",
+                "type":   "folder",
+            })
+            table.add_row("📁", "..", "", "folder")
+
+        for item in items:
+            # Skip hidden files
+            if item.name.startswith("."):
+                continue
+
+            is_dir = item.is_dir()
+
+            # Filter by extension if set
+            if not is_dir and self.filter_ext:
+                if item.suffix.lower() not in self.filter_ext:
+                    continue
+
+            try:
+                size = (
+                    ""
+                    if is_dir
+                    else self._format_size(item.stat().st_size)
+                )
+            except Exception:
+                size = ""
+
+            icon = "📁" if is_dir else self._file_icon(item.suffix)
+            ftype = "folder" if is_dir else item.suffix.lstrip(".").upper

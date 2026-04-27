@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 # main.py
 # VoidSend - Privacy-first newsletter tool
-# Usage: python main.py [--passphrase PASS]
 
 import click
-from config.settings import (
-    load_config, config_exists,
-    load_notification_config
-)
+from config.settings import load_config, config_exists
 from core.mailer import SMTPConfig
 from core.notifier import NotificationConfig
 
@@ -46,6 +42,7 @@ def main(passphrase):
 
     smtp_config      = None
     notification_cfg = NotificationConfig()
+    saved_passphrase = ""
 
     if config_exists():
         if not passphrase:
@@ -64,19 +61,21 @@ def main(passphrase):
                 "Starting setup wizard."
             )
         else:
-            smtp_config = build_smtp_config(cfg_data)
+            smtp_config      = build_smtp_config(cfg_data)
+            saved_passphrase = passphrase
             click.echo("✓ Config loaded.")
 
             notif_data = cfg_data.get("notifications")
             if notif_data:
                 notification_cfg = build_notification_config(notif_data)
-                click.echo("✓ Notification config loaded.")
 
     from ui.app import VoidSendApp
     app = VoidSendApp(
         smtp_config      = smtp_config,
         notification_cfg = notification_cfg,
     )
+    # Store passphrase so settings screen can reload saved config
+    app._config_passphrase = saved_passphrase
     app.run()
 
 
