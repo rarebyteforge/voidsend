@@ -1,6 +1,6 @@
 # ui/app.py
 # VoidSend - Main TUI app
-# Redesigned: hacker green theme, two-row buttons, mobile-friendly
+# Fixed: retry bar only shows when retryable job selected
 
 import time
 from textual.app import App, ComposeResult
@@ -14,6 +14,8 @@ from core.notifier import NotificationConfig, notify_job_event
 from ui.new_job_screen import NewJobScreen
 from ui.setup_screen import SetupScreen
 from config.settings import config_exists
+
+RETRYABLE = (JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.COMPLETED)
 
 
 class JobDashboard(Screen):
@@ -37,38 +39,33 @@ class JobDashboard(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Container(
-            # ── Title bar ─────────────────────────────────────────────────
             Static(
                 "▓▒░ VOIDSEND — NEWSLETTER MANAGER ░▒▓",
                 id="title_bar",
             ),
-
-            # ── Status bar ────────────────────────────────────────────────
             Static("", id="status_bar"),
-
-            # ── Job table ─────────────────────────────────────────────────
             DataTable(id="job_table"),
-
-            # ── Error/info line ───────────────────────────────────────────
             Static("", id="job_error_msg"),
 
-            # ── Button row 1: primary actions ─────────────────────────────
+            # ── Row 1: primary nav ────────────────────────────────────────
             Horizontal(
-                Button("+ NEW",     id="btn_new",     variant="success"),
-                Button("LIBRARY",   id="btn_library", variant="default"),
-                Button("HISTORY",   id="btn_history", variant="default"),
-                Button("RAFFLE",    id="btn_raffle",  variant="default"),
+                Button("+ NEW",    id="btn_new",     variant="success"),
+                Button("LIBRARY",  id="btn_library", variant="default"),
+                Button("HISTORY",  id="btn_history", variant="default"),
+                Button("RAFFLE",   id="btn_raffle",  variant="default"),
                 id="btn_row1",
             ),
 
-            # ── Button row 2: job actions ─────────────────────────────────
+            # ── Row 2: utility ────────────────────────────────────────────
             Horizontal(
-                Button("RETRY",     id="btn_retry",    variant="default"),
-                Button("CANCEL",    id="btn_cancel",   variant="default"),
-                Button("SETTINGS",  id="btn_settings", variant="default"),
-                Button("QUIT",      id="btn_quit",     variant="default"),
+                Button("CANCEL",   id="btn_cancel",   variant="default"),
+                Button("SETTINGS", id="btn_settings", variant="default"),
+                Button("QUIT",     id="btn_quit",     variant="default"),
                 id="btn_row2",
             ),
+
+            # ── Retry bar — only visible when retryable job selected ──────
+            Static("", id="retry_bar"),
 
             id="main_container",
         )
@@ -82,19 +79,11 @@ class JobDashboard(Screen):
             "TIME", "START",
         )
         self.set_interval(1.0, self.refresh_table)
+        self._update_retry_bar()
 
     def refresh_table(self):
         table = self.query_one(DataTable)
         table.clear()
-
-        status_map = {
-            JobStatus.RUNNING:   "▶ RUN",
-            JobStatus.COMPLETED: "✓ DONE",
-            JobStatus.CANCELLED: "⏹ STOP",
-            JobStatus.FAILED:    "✗ FAIL",
-            JobStatus.PENDING:   "⏳ WAIT",
-            JobStatus.PAUSED:    "⏸ PAUSE",
-        }
 
         status_colors = {
             JobStatus.RUNNING:   "[bold green]▶ RUN[/]",
@@ -135,6 +124,44 @@ class JobDashboard(Screen):
             f"   [dim]▸[/dim] HISTORY: {hist}"
         )
 
+        self._update_retry_bar()
+
+    def _selected_state(self) -> JobState | None:
+        table = self.query_one(DataTable)
+        if table.cursor_row is None:
+            return None
+        states = self.job_manager.all_states()
+        if table.cursor_row < len(states):
+            return states[table.cursor_row]
+        return None
+
+    def _update_retry_bar(self):
+        """Show retry bar only when a retryable job is selected."""
+        state     = self._selected_state()
+        retry_bar = self.query_one("#retry_bar", Static)
+
+        if state and state.status in RETRYABLE:
+            status_label = {
+                JobStatus.FAILED:    "FAILED",
+                JobStatus.CANCELLED: "CANCELLED",
+                JobStatus.COMPLETED: "COMPLETED",
+            }.get(state.status, "")
+
+            retry_bar.update(
+                f"  [yellow]▸ [{status_label}] {state.name[:24]} "
+                f"— sent {state.sent} · failed {state.failed}[/yellow]"
+                f"   [bold green][ R — RETRY JOB ][/bold green]"
+            )
+        else:
+            retry_bar.update("")
+
+    def on_data_table_row_highlighted(
+        self, event: DataTable.RowHighlighted
+    ):
+        """Update retry bar whenever table selection changes."""
+        self._update_retry_bar()
+
+        # Show error for failed jobs
         state = self._selected_state()
         if (
             state
@@ -147,14 +174,7 @@ class JobDashboard(Screen):
         else:
             self.query_one("#job_error_msg", Static).update("")
 
-    def _selected_state(self) -> JobState | None:
-        table = self.query_one(DataTable)
-        if table.cursor_row is None:
-            return None
-        states = self.job_manager.all_states()
-        if table.cursor_row < len(states):
-            return states[table.cursor_row]
-        return None
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def action_new_job(self):
         self.app.push_screen(
@@ -182,18 +202,9 @@ class JobDashboard(Screen):
 
     def action_retry_job(self):
         state = self._selected_state()
-        if not state:
+        if not state or state.status not in RETRYABLE:
             self.query_one("#job_error_msg", Static).update(
-                "[yellow]  ⚠ Select a job first[/yellow]"
-            )
-            return
-        if state.status not in (
-            JobStatus.FAILED,
-            JobStatus.CANCELLED,
-            JobStatus.COMPLETED,
-        ):
-            self.query_one("#job_error_msg", Static).update(
-                "[yellow]  ⚠ Only failed/cancelled/done jobs can retry[/yellow]"
+                "[yellow]  ⚠ Select a failed/cancelled/done job to retry[/yellow]"
             )
             return
 
@@ -206,6 +217,7 @@ class JobDashboard(Screen):
         self.query_one("#job_error_msg", Static).update(
             f"[green]  ✓ Retry launched › {new_job.job_id}[/green]"
         )
+        self._update_retry_bar()
 
     def action_cancel_job(self):
         state = self._selected_state()
@@ -224,8 +236,6 @@ class JobDashboard(Screen):
             self.action_history()
         elif event.button.id == "btn_raffle":
             self.action_raffle()
-        elif event.button.id == "btn_retry":
-            self.action_retry_job()
         elif event.button.id == "btn_cancel":
             self.action_cancel_job()
         elif event.button.id == "btn_settings":
@@ -237,12 +247,10 @@ class JobDashboard(Screen):
 class VoidSendApp(App):
 
     CSS = """
-    /* ── Global theme ─────────────────────────────────────────────── */
     Screen {
         background: #0a0e0a;
     }
 
-    /* ── Header ───────────────────────────────────────────────────── */
     Header {
         background: #0d1a0d;
         color: #00ff41;
@@ -254,14 +262,12 @@ class VoidSendApp(App):
         color: #1a4d1a;
     }
 
-    /* ── Main container ───────────────────────────────────────────── */
     #main_container {
         height: 1fr;
         padding: 0 1;
         background: #0a0e0a;
     }
 
-    /* ── Title bar ────────────────────────────────────────────────── */
     #title_bar {
         background: #0d1a0d;
         color: #00ff41;
@@ -271,7 +277,6 @@ class VoidSendApp(App):
         border-bottom: solid #1a4d1a;
     }
 
-    /* ── Status bar ───────────────────────────────────────────────── */
     #status_bar {
         height: 1;
         padding: 0 1;
@@ -280,7 +285,6 @@ class VoidSendApp(App):
         border-bottom: solid #0d1a0d;
     }
 
-    /* ── Job table ────────────────────────────────────────────────── */
     #job_table {
         height: 1fr;
         border: solid #1a4d1a;
@@ -309,11 +313,20 @@ class VoidSendApp(App):
         background: #090d09;
     }
 
-    /* ── Error message ────────────────────────────────────────────── */
     #job_error_msg {
         height: 1;
         padding: 0 1;
         background: #0a0e0a;
+    }
+
+    /* ── Retry bar ────────────────────────────────────────────────── */
+    #retry_bar {
+        height: auto;
+        min-height: 1;
+        padding: 0 1;
+        background: #0a1a0a;
+        border-top: solid #1a4d1a;
+        border-bottom: solid #1a4d1a;
     }
 
     /* ── Button rows ──────────────────────────────────────────────── */
@@ -362,19 +375,14 @@ class VoidSendApp(App):
         border: solid #00cc33;
     }
 
-    #btn_retry {
-        color: #ffaa00 !important;
-        border: solid #664400 !important;
-    }
-
     #btn_cancel {
         color: #cc3300 !important;
         border: solid #441100 !important;
     }
 
     #btn_quit {
-        color: #666666 !important;
-        border: solid #333333 !important;
+        color: #444444 !important;
+        border: solid #222222 !important;
     }
     """
 
