@@ -1,6 +1,6 @@
 # ui/new_job_screen.py
 # VoidSend - New job creation form
-# Added: repeat_count — send same email N times per subscriber
+# Updated: CSV browse replaced with Subscriber Manager
 
 from pathlib import Path
 from textual.app import ComposeResult
@@ -62,6 +62,10 @@ class NewJobScreen(Screen):
         height: auto;
         margin-top: 1;
     }
+    #volume_row {
+        height: auto;
+        margin-top: 1;
+    }
     #content_btns Button {
         margin: 0 1;
         min-width: 18;
@@ -87,9 +91,6 @@ class NewJobScreen(Screen):
     }
     Label {
         margin-top: 1;
-    }
-    Input {
-        margin-bottom: 1;
     }
     Select {
         margin-bottom: 1;
@@ -128,13 +129,14 @@ class NewJobScreen(Screen):
         # Field values
         self._job_name     = ""
         self._csv_path     = ""
+        self._sub_count    = 0
         self._html_path    = ""
         self._text_path    = ""
         self._subject      = ""
         self._max_conn     = "5"
         self._delay        = "0.3"
-        self._send_limit   = ""   # blank = all
-        self._repeat_count = "1"  # default 1 copy
+        self._send_limit   = ""
+        self._repeat_count = "1"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -153,14 +155,14 @@ class NewJobScreen(Screen):
                     classes="field_row",
                 ),
 
-                # ── Subscriber CSV ────────────────────────────────────────
-                Label("Subscriber CSV"),
+                # ── Subscribers ───────────────────────────────────────────
+                Label("Subscribers"),
                 Horizontal(
                     Static(
-                        "[dim]tap browse to select CSV[/dim]",
-                        id="val_csv_path",
+                        "[dim]tap manage to select subscribers[/dim]",
+                        id="val_subscribers",
                     ),
-                    Button("browse", id="btn_browse_csv", variant="default"),
+                    Button("manage", id="btn_manage_subs", variant="success"),
                     classes="field_row",
                 ),
                 Static("", id="preview_info"),
@@ -184,7 +186,7 @@ class NewJobScreen(Screen):
                         ),
                     ),
                     Vertical(
-                        Label("Copies Per Subscriber"),
+                        Label("Copies Each"),
                         Horizontal(
                             Static("1", id="val_repeat_count"),
                             Button(
@@ -197,8 +199,6 @@ class NewJobScreen(Screen):
                     ),
                     id="volume_row",
                 ),
-
-                # ── Send summary ──────────────────────────────────────────
                 Static("", id="send_summary"),
 
                 # ── Content Source ────────────────────────────────────────
@@ -319,9 +319,9 @@ class NewJobScreen(Screen):
 
             # ── Action bar always visible ─────────────────────────────────
             Horizontal(
-                Button("Preview CSV", id="btn_preview", variant="default"),
-                Button("Launch",      id="btn_launch",  variant="success"),
-                Button("Cancel",      id="btn_cancel",  variant="error"),
+                Button("Preview",  id="btn_preview", variant="default"),
+                Button("Launch",   id="btn_launch",  variant="success"),
+                Button("Cancel",   id="btn_cancel",  variant="error"),
                 id="action_bar",
             ),
             id="new_job_container",
@@ -375,31 +375,66 @@ class NewJobScreen(Screen):
             pass
 
     def _update_send_summary(self):
-        """Show a live summary of total emails that will be sent."""
         try:
             limit  = int(self._send_limit) if self._send_limit else None
             repeat = int(self._repeat_count) if self._repeat_count else 1
+            count  = self._sub_count
 
-            if self._csv_path and Path(self._csv_path).exists():
-                result    = load_subscribers(self._csv_path)
-                sub_count = result.valid_count
-                effective = min(limit, sub_count) if limit else sub_count
+            if count > 0:
+                effective = min(limit, count) if limit else count
                 total     = effective * repeat
-
-                parts = [f"[cyan]Subscribers: {effective}[/cyan]"]
-                if limit and limit < sub_count:
-                    parts.append(f"[yellow](limit {limit} of {sub_count})[/yellow]")
+                parts     = [f"[cyan]Subscribers: {effective}[/cyan]"]
+                if limit and limit < count:
+                    parts.append(
+                        f"[yellow](limit {limit} of {count})[/yellow]"
+                    )
                 if repeat > 1:
                     parts.append(f"[yellow]× {repeat} copies[/yellow]")
-                parts.append(f"= [bold green]{total} total emails[/bold green]")
-
+                parts.append(
+                    f"= [bold green]{total} total emails[/bold green]"
+                )
                 self.query_one("#send_summary", Static).update(
                     "  " + "  ".join(parts)
                 )
             else:
                 self.query_one("#send_summary", Static).update("")
         except Exception:
-            self.query_one("#send_summary", Static).update("")
+            pass
+
+    # ── Subscriber manager ────────────────────────────────────────────────────
+
+    def _open_subscriber_manager(self):
+        from ui.subscriber_manager import SubscriberManager
+
+        def on_selected(csv_path: str, count: int):
+            self._csv_path  = csv_path
+            self._sub_count = count
+            self._set_field(
+                "val_subscribers",
+                f"[green]{count} subscriber(s) selected[/green]",
+            )
+            self._show_preview(csv_path)
+            self._update_send_summary()
+
+        self.app.push_screen(
+            SubscriberManager(on_select=on_selected)
+        )
+
+    def _show_preview(self, csv_path: str):
+        try:
+            result = load_subscribers(csv_path)
+            lines  = [
+                f"[green]✓ {result.valid_count} selected[/green]",
+            ]
+            for sub in result.subscribers[:3]:
+                lines.append(f"  • {sub.email}  {sub.name}")
+            if result.valid_count > 3:
+                lines.append(
+                    f"  [dim]... and {result.valid_count - 3} more[/dim]"
+                )
+            self._set_preview("\n".join(lines))
+        except Exception as e:
+            self._set_status(f"✗ Preview error: {e}", "red")
 
     # ── Input dialogs ─────────────────────────────────────────────────────────
 
@@ -477,12 +512,8 @@ class NewJobScreen(Screen):
             self._repeat_count = val
             try:
                 n = int(val)
-                if n == 1:
-                    self._set_field("val_repeat_count", "1 copy")
-                else:
-                    self._set_field(
-                        "val_repeat_count", f"{n} copies each"
-                    )
+                label = "1 copy" if n == 1 else f"{n} copies each"
+                self._set_field("val_repeat_count", label)
             except ValueError:
                 self._set_field("val_repeat_count", val)
             self._update_send_summary()
@@ -556,19 +587,6 @@ class NewJobScreen(Screen):
 
     # ── File browsers ─────────────────────────────────────────────────────────
 
-    def _browse_csv(self):
-        from ui.file_browser import FileBrowserScreen
-        def on_picked(path: str):
-            self._csv_path = path
-            self._set_field("val_csv_path", path.split("/")[-1])
-            self._preview_csv_path(path)
-            self._update_send_summary()
-        self.app.push_screen(FileBrowserScreen(
-            on_select  = on_picked,
-            filter_ext = [".csv"],
-            title      = "Select Subscriber CSV",
-        ))
-
     def _browse_html(self):
         from ui.file_browser import FileBrowserScreen
         def on_picked(path: str):
@@ -590,32 +608,6 @@ class NewJobScreen(Screen):
             filter_ext = [".txt"],
             title      = "Select Plain Text Template",
         ))
-
-    # ── CSV preview ───────────────────────────────────────────────────────────
-
-    def _preview_csv_path(self, path: str):
-        try:
-            result = load_subscribers(path)
-            lines  = [
-                f"[green]✓ {result.valid_count} valid[/green]"
-                f"  [yellow]{result.skip_count} skipped[/yellow]",
-            ]
-            for sub in result.subscribers[:3]:
-                lines.append(f"  • {sub.email}  {sub.name}")
-            if result.valid_count > 3:
-                lines.append(
-                    f"  [dim]... and {result.valid_count - 3} more[/dim]"
-                )
-            self._set_preview("\n".join(lines))
-        except Exception as e:
-            self._set_status(f"✗ CSV error: {e}", "red")
-
-    def _preview_csv(self):
-        if not self._csv_path:
-            self._set_status("✗ Browse to a CSV first", "red")
-            return
-        self._preview_csv_path(self._csv_path)
-        self._update_send_summary()
 
     # ── Builder / Library ─────────────────────────────────────────────────────
 
@@ -655,6 +647,17 @@ class NewJobScreen(Screen):
                 pass
         self.app.push_screen(LibraryScreen(on_select=on_template_selected))
 
+    # ── Preview ───────────────────────────────────────────────────────────────
+
+    def _preview(self):
+        if not self._csv_path:
+            self._set_status(
+                "✗ Open Subscriber Manager first", "red"
+            )
+            return
+        self._show_preview(self._csv_path)
+        self._update_send_summary()
+
     # ── Launch ────────────────────────────────────────────────────────────────
 
     def _validate_and_launch(self):
@@ -663,7 +666,7 @@ class NewJobScreen(Screen):
         if not self._job_name:
             errors.append("Job name required — tap edit")
         if not self._csv_path or not Path(self._csv_path).exists():
-            errors.append("Valid CSV required — tap browse")
+            errors.append("Subscribers required — tap manage")
 
         html_path = text_path = subject = None
 
@@ -681,7 +684,6 @@ class NewJobScreen(Screen):
                     "No content loaded — use Builder or Library"
                 )
 
-        # Parse send limit
         send_limit = None
         if self._send_limit:
             try:
@@ -691,7 +693,6 @@ class NewJobScreen(Screen):
             except ValueError:
                 errors.append("Send limit must be a whole number")
 
-        # Parse repeat count
         repeat_count = 1
         if self._repeat_count:
             try:
@@ -699,7 +700,7 @@ class NewJobScreen(Screen):
                 if repeat_count < 1:
                     errors.append("Copies must be at least 1")
                 if repeat_count > 100:
-                    errors.append("Maximum 100 copies per subscriber")
+                    errors.append("Max 100 copies per subscriber")
             except ValueError:
                 errors.append("Copies must be a whole number")
 
@@ -754,7 +755,6 @@ class NewJobScreen(Screen):
         job = self.job_manager.create_job(cfg)
         self.job_manager.start_job(job)
 
-        # Calculate total for confirmation
         try:
             result    = load_subscribers(self._csv_path)
             effective = min(send_limit, result.valid_count) \
@@ -762,8 +762,8 @@ class NewJobScreen(Screen):
             total     = effective * repeat_count
             self._set_status(
                 f"✓ Job {job.job_id} launched — "
-                f"{total} emails sending "
-                f"({effective} subscribers × {repeat_count})",
+                f"{total} emails "
+                f"({effective} subs × {repeat_count})",
                 "green",
             )
         except Exception:
@@ -777,8 +777,8 @@ class NewJobScreen(Screen):
         bid = event.button.id
         if bid == "btn_edit_job_name":
             self._edit_job_name()
-        elif bid == "btn_browse_csv":
-            self._browse_csv()
+        elif bid == "btn_manage_subs":
+            self._open_subscriber_manager()
         elif bid == "btn_edit_send_limit":
             self._edit_send_limit()
         elif bid == "btn_edit_repeat_count":
@@ -794,7 +794,7 @@ class NewJobScreen(Screen):
         elif bid == "btn_edit_delay":
             self._edit_delay()
         elif bid == "btn_preview":
-            self._preview_csv()
+            self._preview()
         elif bid == "btn_open_builder":
             self._open_builder()
         elif bid == "btn_open_library":
