@@ -1,5 +1,6 @@
 # ui/raffle_screen.py
 # VoidSend - Raffle setup and management TUI screen
+# Added: send_limit support in RaffleSendScreen
 
 import asyncio
 import time
@@ -24,9 +25,9 @@ from core.csv_reader import load_subscribers
 
 
 TICKET_LENGTH_OPTIONS = [
-    ("4 digits  (e.g. 4821)",         "4"),
-    ("6 digits  (e.g. 482193)",       "6"),
-    ("9 digits  (e.g. 482193756)",    "9"),
+    ("4 digits  (e.g. 4821)",      "4"),
+    ("6 digits  (e.g. 482193)",    "6"),
+    ("9 digits  (e.g. 482193756)", "9"),
 ]
 
 STATUS_COLORS = {
@@ -96,7 +97,7 @@ class RaffleScreen(Screen):
         super().__init__(**kwargs)
         self.smtp_config = smtp_config
         self.job_manager = job_manager
-        self._raffles:  list[RaffleConfig] = []
+        self._raffles: list[RaffleConfig] = []
         self._server = None
 
     def compose(self) -> ComposeResult:
@@ -137,11 +138,13 @@ class RaffleScreen(Screen):
                 "[dim]No raffles yet[/dim]",
                 "", "", "", "", "", "",
             )
-            self._set_status("No raffles found. Press N to create one.", "dim")
+            self._set_status(
+                "No raffles found. Press N to create one.", "dim"
+            )
             return
 
         for r in self._raffles:
-            created = time.strftime(
+            created    = time.strftime(
                 "%m/%d %H:%M", time.localtime(r.created_at)
             )
             status_str = STATUS_COLORS.get(r.status, r.status.value)
@@ -182,15 +185,14 @@ class RaffleScreen(Screen):
 
         lines = [
             f"[bold]{raffle.name}[/bold]  [{raffle.raffle_id}]",
-            f"Prize       : [green]{raffle.prize}[/green]",
-            f"Ticket len  : {raffle.ticket_length} digits",
-            f"Verify URL  : [cyan]{raffle.verify_url or 'not set — start to activate'}[/cyan]",
+            f"Prize      : [green]{raffle.prize}[/green]",
+            f"Ticket len : {raffle.ticket_length} digits",
+            f"Verify URL : [cyan]{raffle.verify_url or 'not set — start to activate'}[/cyan]",
         ]
         if raffle.expiry_date:
-            lines.append(f"Expires     : {raffle.expiry_date}")
+            lines.append(f"Expires    : {raffle.expiry_date}")
         detail.update("\n".join(lines))
 
-        # Stats
         s = raffle_stats(raffle)
         stats.update(
             f"Entries: [white]{s['total']}[/white]  "
@@ -215,7 +217,8 @@ class RaffleScreen(Screen):
         self._load_table()
         self._set_status(
             f"✓ Raffle '{raffle.name}' created with "
-            f"{len(raffle.entries)} tickets", "green"
+            f"{len(raffle.entries)} tickets",
+            "green",
         )
 
     def action_start(self):
@@ -250,15 +253,15 @@ class RaffleScreen(Screen):
                 self._show_detail(raffle_reloaded)
 
         self._server = await start_raffle_server(
-            raffle_id  = raffle.raffle_id,
-            port       = raffle.server_port,
-            on_winner  = on_winner,
-            on_verify  = on_verify,
+            raffle_id = raffle.raffle_id,
+            port      = raffle.server_port,
+            on_winner = on_winner,
+            on_verify = on_verify,
         )
 
         self._load_table()
         self._set_status(
-            f"✓ Server running — share this URL with subscribers: "
+            f"✓ Server running — share URL with subscribers: "
             f"[cyan]{url}[/cyan]",
             "green",
         )
@@ -266,20 +269,19 @@ class RaffleScreen(Screen):
     async def _notify_winner(
         self, raffle: RaffleConfig, result: dict
     ):
-        """Fire push notification when a winner verifies."""
         from core.notifier import notify_job_event
-        notif_cfg = getattr(
-            self.app, "notification_cfg", None
-        )
+        notif_cfg = getattr(self.app, "notification_cfg", None)
         if not notif_cfg or not notif_cfg.enabled:
             return
-
         await notify_job_event(
             cfg         = notif_cfg,
             smtp_config = self.smtp_config,
             job_id      = raffle.raffle_id,
-            name        = f"Raffle Winner — {raffle.name}",
-            status      = "winner verified",
+            name        = f"🎉 Raffle Winner — {raffle.name}",
+            status      = (
+                f"Ticket {result.get('ticket','')} — "
+                f"{result.get('email','')}"
+            ),
             sent        = 0,
             failed      = 0,
             elapsed     = 0,
@@ -396,10 +398,8 @@ class NewRaffleScreen(Screen):
         **kwargs
     ):
         super().__init__(**kwargs)
-        self.smtp_config = smtp_config
-        self.on_created  = on_created
-
-        # Field values
+        self.smtp_config   = smtp_config
+        self.on_created    = on_created
         self._name         = ""
         self._prize        = ""
         self._message      = ""
@@ -414,69 +414,64 @@ class NewRaffleScreen(Screen):
         yield Container(
             Static("🎟  Create New Raffle", id="new_raffle_title"),
             ScrollableContainer(
-
                 Label("Raffle Name"),
                 Horizontal(
                     Static("[dim]not set[/dim]", id="val_rname"),
                     Button("edit", id="btn_edit_rname", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Prize Description"),
                 Horizontal(
                     Static("[dim]not set[/dim]", id="val_prize"),
                     Button("edit", id="btn_edit_prize", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Custom Message (shown in email + verify page)"),
                 Horizontal(
                     Static("[dim]not set[/dim]", id="val_message"),
                     Button("edit", id="btn_edit_message", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Subscriber CSV"),
                 Horizontal(
                     Static("[dim]tap browse[/dim]", id="val_csv"),
                     Button("browse", id="btn_browse_csv", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Ticket Length"),
                 Select(
                     options=TICKET_LENGTH_OPTIONS,
                     id="ticket_len_select",
                     value="6",
                 ),
-
                 Label("Number of Winners"),
                 Horizontal(
                     Static("1", id="val_winners"),
                     Button("edit", id="btn_edit_winners", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Expiry Date (optional, e.g. 2026-12-31)"),
                 Horizontal(
                     Static("[dim]no expiry[/dim]", id="val_expiry"),
                     Button("edit", id="btn_edit_expiry", variant="default"),
                     classes="field_row",
                 ),
-
                 Label("Server Port"),
                 Horizontal(
                     Static("8080", id="val_port"),
                     Button("edit", id="btn_edit_port", variant="default"),
                     classes="field_row",
                 ),
-
                 Static("", id="new_raffle_status"),
                 id="new_raffle_scroll",
             ),
             Horizontal(
-                Button("Generate Tickets", id="btn_generate", variant="success"),
-                Button("Cancel",           id="btn_cancel",   variant="error"),
+                Button(
+                    "Generate Tickets",
+                    id="btn_generate",
+                    variant="success",
+                ),
+                Button("Cancel", id="btn_cancel", variant="error"),
                 id="new_raffle_actions",
             ),
             id="new_raffle_container",
@@ -510,7 +505,10 @@ class NewRaffleScreen(Screen):
         except Exception:
             pass
 
-    def _edit(self, title, label, attr, wid, hint="", validator=None):
+    def _edit(
+        self, title, label, attr, wid,
+        hint="", validator=None
+    ):
         from ui.input_dialog import InputDialog
         def on_submit(val: str):
             setattr(self, attr, val)
@@ -529,7 +527,6 @@ class NewRaffleScreen(Screen):
         def on_picked(path: str):
             self._csv_path = path
             self._set_field("val_csv", path.split("/")[-1])
-            # Show subscriber count
             try:
                 result = load_subscribers(path)
                 self._set_status(
@@ -579,21 +576,23 @@ class NewRaffleScreen(Screen):
             ]
 
             if not subscribers:
-                self._set_status("✗ No valid subscribers in CSV", "red")
+                self._set_status(
+                    "✗ No valid subscribers in CSV", "red"
+                )
                 return
 
             ticket_len = int(self._ticket_len)
             raffle     = generate_tickets(
-                subscribers  = subscribers,
+                subscribers   = subscribers,
                 ticket_length = ticket_len,
                 winner_count  = winner_count,
             )
 
-            raffle.name         = self._name
-            raffle.prize        = self._prize
-            raffle.message      = self._message
-            raffle.expiry_date  = self._expiry or None
-            raffle.server_port  = port
+            raffle.name        = self._name
+            raffle.prize       = self._prize
+            raffle.message     = self._message
+            raffle.expiry_date = self._expiry or None
+            raffle.server_port = port
 
             save_raffle(raffle)
 
@@ -606,13 +605,14 @@ class NewRaffleScreen(Screen):
             if self.on_created:
                 self.on_created(raffle)
 
-            # Ask if user wants to send emails now
             self.app.pop_screen()
             self.app.push_screen(
                 RaffleSendScreen(
                     raffle      = raffle,
                     smtp_config = self.smtp_config,
-                    job_manager = getattr(self.app, "job_manager", None),
+                    job_manager = getattr(
+                        self.app, "job_manager", None
+                    ),
                 )
             )
 
@@ -675,7 +675,7 @@ class NewRaffleScreen(Screen):
 # ── Raffle Send Screen ────────────────────────────────────────────────────────
 
 class RaffleSendScreen(Screen):
-    """Confirm and send raffle emails to all subscribers."""
+    """Confirm and send raffle emails with optional send limit."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
@@ -699,12 +699,35 @@ class RaffleSendScreen(Screen):
         text-style: bold;
         margin-bottom: 2;
     }
+    .field_row {
+        height: auto;
+        margin-bottom: 1;
+    }
+    .field_row Static {
+        width: 1fr;
+        height: 3;
+        border: solid $panel;
+        padding: 0 1;
+        content-align: left middle;
+        background: $panel;
+    }
+    .field_row Button {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
+        height: 3;
+    }
     #send_status { min-height: 1; margin-top: 1; }
+    #send_actions {
+        height: auto;
+        margin-top: 1;
+    }
     #send_actions Button {
         margin: 0 1;
         min-width: 18;
         height: 3;
     }
+    Label { margin-top: 1; }
     """
 
     def __init__(
@@ -718,23 +741,45 @@ class RaffleSendScreen(Screen):
         self.raffle      = raffle
         self.smtp_config = smtp_config
         self.job_manager = job_manager
+        self._send_limit = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
             Vertical(
-                Static("✉  Send Raffle Emails", id="send_title"),
+                Static(
+                    "✉  Send Raffle Emails",
+                    id="send_title",
+                ),
                 Static(
                     f"Raffle  : [bold]{self.raffle.name}[/bold]\n"
                     f"Prize   : [green]{self.raffle.prize}[/green]\n"
-                    f"Tickets : [cyan]{len(self.raffle.entries)}[/cyan] subscribers\n"
-                    f"Winners : [yellow]{self.raffle.winner_count}[/yellow] pre-selected\n\n"
-                    f"Each subscriber will receive a personalized email\n"
-                    f"with their unique ticket number and a verify link.\n\n"
-                    f"[dim]Start the raffle server first so the verify\n"
-                    f"URL is available when emails are opened.[/dim]",
+                    f"Tickets : [cyan]{len(self.raffle.entries)}[/cyan]"
+                    f" subscribers\n"
+                    f"Winners : [yellow]{self.raffle.winner_count}[/yellow]"
+                    f" pre-selected\n\n"
+                    f"Each subscriber gets a personalized email\n"
+                    f"with their unique ticket number + verify link.",
                     id="send_summary",
                 ),
+
+                # ── Send limit ────────────────────────────────────────────
+                Label(
+                    "Send Limit (optional — blank = send all)"
+                ),
+                Horizontal(
+                    Static(
+                        "[dim]all subscribers[/dim]",
+                        id="val_send_limit",
+                    ),
+                    Button(
+                        "edit",
+                        id="btn_edit_limit",
+                        variant="default",
+                    ),
+                    classes="field_row",
+                ),
+
                 Static("", id="send_status"),
                 Horizontal(
                     Button(
@@ -760,6 +805,54 @@ class RaffleSendScreen(Screen):
             f"[{color}]{msg}[/{color}]"
         )
 
+    def _edit_limit(self):
+        from ui.input_dialog import InputDialog
+        def on_submit(val: str):
+            val = val.strip()
+            self._send_limit = val
+            try:
+                w = self.query_one("#val_send_limit", Static)
+                if val:
+                    effective = min(
+                        int(val), len(self.raffle.entries)
+                    )
+                    w.update(
+                        f"first {effective} of "
+                        f"{len(self.raffle.entries)} subscribers"
+                    )
+                else:
+                    w.update("[dim]all subscribers[/dim]")
+            except Exception:
+                pass
+
+        def validate(val: str):
+            if not val:
+                return None
+            try:
+                n = int(val)
+                if n < 1:
+                    return "Must be at least 1"
+                if n > len(self.raffle.entries):
+                    return (
+                        f"Max is {len(self.raffle.entries)} "
+                        f"(total subscribers)"
+                    )
+            except ValueError:
+                return "Must be a whole number or leave blank"
+
+        self.app.push_screen(InputDialog(
+            title         = "Send Limit",
+            label         = "Max raffle emails to send:",
+            on_submit     = on_submit,
+            initial_value = self._send_limit,
+            hint          = (
+                f"Total subscribers: {len(self.raffle.entries)}\n"
+                "Leave blank to send to everyone.\n"
+                "Useful if near daily SMTP limit."
+            ),
+            validator     = validate,
+        ))
+
     def _send_emails(self):
         if not self.smtp_config:
             self._set_status(
@@ -771,25 +864,34 @@ class RaffleSendScreen(Screen):
             return
 
         try:
-            # Write raffle template to temp file with entries
             self._create_raffle_job()
         except Exception as e:
             self._set_status(f"✗ Error: {e}", "red")
 
     def _create_raffle_job(self):
-        """
-        Create a send job for raffle emails.
-        Generates a temporary CSV with ticket numbers injected
-        and uses the raffle HTML template.
-        """
         import csv
-        import tempfile
         from pathlib import Path as P
         from core.job_manager import JobConfig
 
-        # Write temp CSV with ticket column added
-        tmp_csv = P.home() / ".voidsend" / f"raffle_{self.raffle.raffle_id}.csv"
+        # Parse send limit
+        send_limit = None
+        if self._send_limit:
+            try:
+                send_limit = int(self._send_limit)
+            except ValueError:
+                pass
+
+        # Write temp CSV
+        tmp_csv = (
+            P.home() / ".voidsend"
+            / f"raffle_{self.raffle.raffle_id}.csv"
+        )
         tmp_csv.parent.mkdir(parents=True, exist_ok=True)
+
+        entries = self.raffle.entries
+        # Apply send limit to entries if set
+        if send_limit and send_limit < len(entries):
+            entries = entries[:send_limit]
 
         with open(tmp_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -797,11 +899,12 @@ class RaffleSendScreen(Screen):
                 fieldnames=[
                     "email", "name", "ticket",
                     "raffle_name", "raffle_prize",
-                    "raffle_message", "verify_url", "expiry_date",
+                    "raffle_message", "verify_url",
+                    "expiry_date",
                 ],
             )
             writer.writeheader()
-            for entry in self.raffle.entries:
+            for entry in entries:
                 writer.writerow({
                     "email":          entry.email,
                     "name":           entry.name,
@@ -809,12 +912,14 @@ class RaffleSendScreen(Screen):
                     "raffle_name":    self.raffle.name,
                     "raffle_prize":   self.raffle.prize,
                     "raffle_message": self.raffle.message,
-                    "verify_url":     self.raffle.verify_url or
-                                      f"http://YOUR_IP:{self.raffle.server_port}/verify",
+                    "verify_url":     (
+                        self.raffle.verify_url
+                        or f"http://YOUR_IP:"
+                           f"{self.raffle.server_port}/verify"
+                    ),
                     "expiry_date":    self.raffle.expiry_date or "",
                 })
 
-        # Use raffle layout template
         template_path = (
             P(__file__).parent.parent
             / "templates" / "layouts" / "raffle.html"
@@ -830,24 +935,34 @@ class RaffleSendScreen(Screen):
             name               = f"Raffle: {self.raffle.name}",
             csv_path           = str(tmp_csv),
             html_template_path = str(template_path),
-            subject_template   = f"🎟 Your ticket for {self.raffle.name}",
+            subject_template   = (
+                f"🎟 Your ticket for {self.raffle.name}"
+            ),
             smtp_config        = self.smtp_config,
             max_connections    = 3,
             delay_seconds      = 0.5,
             append_unsubscribe = False,
+            send_limit         = None,  # already sliced above
         )
 
         job = self.job_manager.create_job(cfg)
         self.job_manager.start_job(job)
 
+        limit_note = (
+            f" (first {len(entries)} of "
+            f"{len(self.raffle.entries)})"
+            if send_limit else ""
+        )
         self._set_status(
             f"✓ Job {job.job_id} launched — "
-            f"{len(self.raffle.entries)} raffle emails sending!",
+            f"{len(entries)} raffle emails sending{limit_note}!",
             "green",
         )
 
     def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "btn_send":
+        if event.button.id == "btn_edit_limit":
+            self._edit_limit()
+        elif event.button.id == "btn_send":
             self._send_emails()
         elif event.button.id == "btn_skip":
             self.action_cancel()

@@ -1,27 +1,28 @@
 # ui/subscriber_manager.py
 # VoidSend - Inline subscriber manager
-# Add, remove, search subscribers without editing CSV files directly.
-# Persists to ~/.voidsend/subscribers.json
-# Can import from CSV and export back to CSV.
+# Fixed: removed Header/Footer — avoids HeaderTitle crash on older Textual
 
 import csv
 import json
+import re
 import time
 from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
-    Button, Header, Footer,
-    DataTable, Static, Label
+    Button, DataTable, Static
 )
 from typing import Optional, Callable
 
 SUBS_FILE = Path.home() / ".voidsend" / "subscribers.json"
+EMAIL_RE  = re.compile(
+    r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
+)
 
 
-# ── Data model ────────────────────────────────────────────────────────────────
+# ── Data layer ────────────────────────────────────────────────────────────────
 
 def _load_all() -> list[dict]:
     if not SUBS_FILE.exists():
@@ -40,34 +41,27 @@ def _save_all(subs: list[dict]):
 
 
 def add_subscriber(email: str, name: str = "", **extra) -> bool:
-    """Add subscriber. Returns False if email already exists."""
+    email = email.strip().lower()
+    if not EMAIL_RE.match(email):
+        return False
     subs = _load_all()
-    if any(s["email"].lower() == email.lower() for s in subs):
+    if any(s["email"].lower() == email for s in subs):
         return False
     subs.append({
-        "email":      email.strip().lower(),
-        "name":       name.strip(),
-        "added_at":   time.strftime("%Y-%m-%d %H:%M:%S"),
+        "email":    email,
+        "name":     name.strip(),
+        "added_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         **extra,
     })
     _save_all(subs)
     return True
 
 
-def remove_subscriber(email: str) -> bool:
-    subs = _load_all()
-    new  = [s for s in subs if s["email"].lower() != email.lower()]
-    if len(new) == len(subs):
-        return False
-    _save_all(new)
-    return True
-
-
 def remove_subscribers(emails: list[str]) -> int:
-    """Remove multiple subscribers. Returns count removed."""
     email_set = {e.lower() for e in emails}
     subs      = _load_all()
-    new       = [s for s in subs if s["email"].lower() not in email_set]
+    new       = [s for s in subs
+                 if s["email"].lower() not in email_set]
     removed   = len(subs) - len(new)
     _save_all(new)
     return removed
@@ -80,19 +74,15 @@ def search_subscribers(query: str) -> list[dict]:
         return subs
     return [
         s for s in subs
-        if q in s["email"].lower() or q in s.get("name", "").lower()
+        if q in s["email"].lower()
+        or q in s.get("name", "").lower()
     ]
 
 
 def import_from_csv(csv_path: str) -> tuple[int, int]:
-    """
-    Import subscribers from CSV.
-    Returns (imported, skipped_duplicates).
-    """
     from core.csv_reader import load_subscribers
     result   = load_subscribers(csv_path)
-    imported = 0
-    skipped  = 0
+    imported = skipped = 0
     for sub in result.subscribers:
         ok = add_subscriber(
             email = sub.email,
@@ -106,29 +96,31 @@ def import_from_csv(csv_path: str) -> tuple[int, int]:
     return imported, skipped
 
 
-def export_to_csv(csv_path: str, emails: Optional[list[str]] = None) -> int:
-    """
-    Export subscribers to CSV.
-    emails: if provided, only export these emails.
-    Returns count exported.
-    """
+def export_to_csv(
+    csv_path: str,
+    emails: Optional[list[str]] = None,
+) -> int:
     subs = _load_all()
     if emails:
         email_set = {e.lower() for e in emails}
-        subs      = [s for s in subs if s["email"].lower() in email_set]
-
+        subs      = [s for s in subs
+                     if s["email"].lower() in email_set]
     if not subs:
         return 0
 
-    # Collect all field names
     fields = ["email", "name"]
     extra  = set()
     for s in subs:
-        extra.update(k for k in s if k not in ("email", "name", "added_at"))
+        extra.update(
+            k for k in s
+            if k not in ("email", "name", "added_at")
+        )
     fields += sorted(extra)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(
+            f, fieldnames=fields, extrasaction="ignore"
+        )
         writer.writeheader()
         for s in subs:
             writer.writerow({k: s.get(k, "") for k in fields})
@@ -136,31 +128,32 @@ def export_to_csv(csv_path: str, emails: Optional[list[str]] = None) -> int:
     return len(subs)
 
 
-def get_selected_csv(emails: list[str]) -> str:
-    """
-    Write selected subscribers to a temp CSV and return path.
-    Used by new job screen to pass selected list to mailer.
-    """
-    tmp = Path.home() / ".voidsend" / "selected_subscribers.csv"
-    export_to_csv(str(tmp), emails)
+def write_temp_csv(
+    emails: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Write to temp CSV. Returns None if no subscribers."""
+    subs = _load_all()
+    if emails:
+        email_set = {e.lower() for e in emails}
+        subs      = [s for s in subs
+                     if s["email"].lower() in email_set]
+    if not subs:
+        return None
+    tmp = Path.home() / ".voidsend" / (
+        "selected_subscribers.csv"
+        if emails else "all_subscribers.csv"
+    )
+    export_to_csv(str(tmp), [s["email"] for s in subs])
     return str(tmp)
 
 
-def get_all_csv() -> str:
-    """Write all subscribers to temp CSV and return path."""
-    tmp = Path.home() / ".voidsend" / "all_subscribers.csv"
-    export_to_csv(str(tmp))
-    return str(tmp)
+def subscriber_count() -> int:
+    return len(_load_all())
 
 
 # ── Screen ────────────────────────────────────────────────────────────────────
 
 class SubscriberManager(Screen):
-    """
-    Full subscriber manager.
-    on_select(csv_path, count) called when user confirms selection.
-    If on_select is None, runs in standalone management mode.
-    """
 
     BINDINGS = [
         Binding("escape", "cancel",     "Back"),
@@ -171,52 +164,88 @@ class SubscriberManager(Screen):
     ]
 
     CSS = """
+    SubscriberManager {
+        background: #0a0e0a;
+    }
+    #sub_titlebar {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-align: center;
+        padding: 0 1;
+        text-style: bold;
+        border-bottom: solid #1a4d1a;
+        height: 1;
+    }
     #sub_container {
         height: 1fr;
-        padding: 1 2;
-    }
-    #sub_title {
-        background: $accent;
-        color: $text;
-        text-align: center;
-        padding: 1;
-        text-style: bold;
-        margin-bottom: 1;
+        padding: 0 1;
+        background: #0a0e0a;
     }
     #search_bar {
         height: 1;
         padding: 0 1;
         margin-bottom: 1;
-        color: $accent;
+        color: #00cc33;
     }
     #sub_table {
         height: 1fr;
-        border: solid $accent;
+        border: solid #1a4d1a;
+        background: #080c08;
+        color: #00cc33;
+    }
+    DataTable > .datatable--header {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-style: bold;
+    }
+    DataTable > .datatable--cursor {
+        background: #0d3d0d;
+        color: #00ff41;
     }
     #sub_status {
         min-height: 1;
         margin-top: 1;
         padding: 0 1;
+        color: #00cc33;
     }
     #sub_actions {
         height: auto;
         margin-top: 1;
-        padding: 1 0;
+        background: #0a0e0a;
     }
     #sub_actions Button {
         margin: 0 1;
         min-width: 14;
         height: 3;
+        background: #0d1a0d;
+        color: #00cc33;
+        border: solid #1a4d1a;
     }
     #sub_actions2 {
         height: auto;
-        margin-top: 0;
-        padding: 0;
+        background: #0a0e0a;
     }
     #sub_actions2 Button {
         margin: 0 1;
         min-width: 14;
         height: 3;
+        background: #080c08;
+        color: #1a8c1a;
+        border: solid #0d2d0d;
+    }
+    #btn_add_sub {
+        background: #003300 !important;
+        color: #00ff41 !important;
+        border: solid #00cc33 !important;
+    }
+    #btn_use_sub {
+        background: #003300 !important;
+        color: #00ff41 !important;
+        border: solid #00cc33 !important;
+    }
+    #btn_delete_sub {
+        color: #cc3300 !important;
+        border: solid #441100 !important;
     }
     """
 
@@ -227,99 +256,98 @@ class SubscriberManager(Screen):
     ):
         super().__init__(**kwargs)
         self.on_select     = on_select
-        self._all_subs:    list[dict] = []
         self._filtered:    list[dict] = []
         self._selected:    set[str]   = set()
         self._search_query = ""
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static(
+            "▓▒░ SUBSCRIBER MANAGER ░▒▓",
+            id="sub_titlebar",
+        )
         yield Container(
-            Static(
-                "👥  Subscriber Manager",
-                id="sub_title",
-            ),
             Static("", id="search_bar"),
             DataTable(id="sub_table", cursor_type="row"),
             Static("", id="sub_status"),
-
-            # ── Row 1 ─────────────────────────────────────────────────────
             Horizontal(
-                Button("+ Add [A]",      id="btn_add",        variant="success"),
-                Button("Search [S]",     id="btn_search",     variant="default"),
-                Button("Select All",     id="btn_select_all", variant="default"),
-                Button("Clear Sel",      id="btn_clear_sel",  variant="default"),
+                Button("+ Add",      id="btn_add_sub",    variant="success"),
+                Button("Search",     id="btn_search_sub", variant="default"),
+                Button("Select All", id="btn_sel_all",    variant="default"),
+                Button("Clear Sel",  id="btn_clr_sel",    variant="default"),
                 id="sub_actions",
             ),
-
-            # ── Row 2 ─────────────────────────────────────────────────────
             Horizontal(
-                Button("Delete Sel [D]", id="btn_delete",     variant="error"),
-                Button("Import CSV",     id="btn_import",     variant="default"),
-                Button("Export CSV",     id="btn_export",     variant="default"),
+                Button("Delete",     id="btn_delete_sub", variant="error"),
+                Button("Import CSV", id="btn_import_sub", variant="default"),
+                Button("Export CSV", id="btn_export_sub", variant="default"),
                 Button(
                     "✓ Use Selected" if self.on_select else "Back",
-                    id="btn_use",
-                    variant="success" if self.on_select else "default",
+                    id="btn_use_sub",
+                    variant="success",
                 ),
                 id="sub_actions2",
             ),
             id="sub_container",
         )
-        yield Footer()
 
     def on_mount(self):
         table = self.query_one(DataTable)
-        table.add_columns(
-            "✓", "EMAIL", "NAME", "ADDED",
-        )
+        table.add_columns("✓", "EMAIL", "NAME", "ADDED")
         self._reload()
 
     def _reload(self, query: str = ""):
         self._search_query = query
-        self._all_subs     = _load_all()
-        self._filtered     = search_subscribers(query) if query else list(self._all_subs)
+        self._filtered     = search_subscribers(query)
+        total              = subscriber_count()
 
         table = self.query_one(DataTable)
         table.clear()
 
         if not self._filtered:
             table.add_row(
-                "", "[dim]No subscribers[/dim]", "", ""
+                "",
+                "[dim]No subscribers — tap + Add[/dim]",
+                "", "",
             )
             self._set_status(
-                f"0 subscribers"
-                + (f" matching '{query}'" if query else ""),
+                f"0 of {total}"
+                + (f" match '{query}'" if query else ""),
                 "dim",
             )
             return
 
         for sub in self._filtered:
-            email    = sub["email"]
-            name     = sub.get("name", "")
-            added    = sub.get("added_at", "")[:10]
-            selected = "[green]●[/green]" if email in self._selected else " "
-            table.add_row(selected, email, name, added)
+            email = sub["email"]
+            tick  = (
+                "[green]●[/green]"
+                if email in self._selected else " "
+            )
+            table.add_row(
+                tick,
+                email,
+                sub.get("name", ""),
+                sub.get("added_at", "")[:10],
+            )
 
-        sel_count = len(self._selected)
-        total     = len(self._all_subs)
-        shown     = len(self._filtered)
-
+        sel   = len(self._selected)
+        shown = len(self._filtered)
         self._set_status(
             f"Total: [white]{total}[/white]"
-            + (f"  Shown: [yellow]{shown}[/yellow]" if shown != total else "")
-            + (f"  Selected: [green]{sel_count}[/green]" if sel_count else ""),
+            + (
+                f"  Shown: [yellow]{shown}[/yellow]"
+                if shown != total else ""
+            )
+            + (
+                f"  Selected: [green]{sel}[/green]"
+                if sel else ""
+            ),
             "dim",
         )
 
-        # Update search bar
-        if query:
-            self.query_one("#search_bar", Static).update(
-                f"[yellow]🔍 Search: '{query}' — {shown} results[/yellow]"
-                f"   [dim](S to search again, ESC to clear)[/dim]"
-            )
-        else:
-            self.query_one("#search_bar", Static).update("")
+        self.query_one("#search_bar", Static).update(
+            f"[yellow]🔍 '{query}'  {shown} results[/yellow]"
+            if query else ""
+        )
 
     def _set_status(self, msg: str, color: str = "white"):
         self.query_one("#sub_status", Static).update(
@@ -334,8 +362,9 @@ class SubscriberManager(Screen):
             return None
         return self._filtered[table.cursor_row]["email"]
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected):
-        """Toggle selection on row tap."""
+    def on_data_table_row_selected(
+        self, event: DataTable.RowSelected
+    ):
         email = self._selected_email()
         if not email:
             return
@@ -359,47 +388,39 @@ class SubscriberManager(Screen):
     def action_select_all(self):
         self._selected = {s["email"] for s in self._filtered}
         self._reload(self._search_query)
-        self._set_status(
-            f"Selected all {len(self._selected)} subscribers", "green"
-        )
 
     def _open_add_dialog(self):
         from ui.input_dialog import InputDialog
 
-        # Step 1: get email
         def on_email(email: str):
             email = email.strip().lower()
             if not email:
                 return
 
-            # Step 2: get name
             def on_name(name: str):
                 ok = add_subscriber(email=email, name=name.strip())
                 if ok:
                     self._reload(self._search_query)
-                    self._set_status(
-                        f"✓ Added: {email}", "green"
-                    )
+                    self._set_status(f"✓ Added: {email}", "green")
                 else:
                     self._set_status(
-                        f"✗ {email} already exists", "red"
+                        f"✗ {email} already exists or invalid",
+                        "red",
                     )
 
             self.app.push_screen(InputDialog(
                 title         = "Subscriber Name",
-                label         = f"Enter name for {email} (optional):",
+                label         = f"Name for {email} (optional):",
                 on_submit     = on_name,
                 initial_value = "",
                 hint          = "Leave blank if unknown",
             ))
 
         def validate_email(val: str):
-            import re
             val = val.strip().lower()
             if not val:
                 return "Email is required"
-            pattern = r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
-            if not re.match(pattern, val):
+            if not EMAIL_RE.match(val):
                 return "Invalid email format"
 
         self.app.push_screen(InputDialog(
@@ -414,11 +435,11 @@ class SubscriberManager(Screen):
         from ui.input_dialog import InputDialog
 
         def on_query(q: str):
-            self._selected = set()  # clear selection on new search
+            self._selected = set()
             self._reload(q.strip())
 
         self.app.push_screen(InputDialog(
-            title         = "Search Subscribers",
+            title         = "Search",
             label         = "Search by email or name:",
             on_submit     = on_query,
             initial_value = self._search_query,
@@ -430,10 +451,9 @@ class SubscriberManager(Screen):
             email = self._selected_email()
             if not email:
                 self._set_status(
-                    "✗ Select subscribers first (tap to select)", "red"
+                    "✗ Tap a row to select first", "red"
                 )
                 return
-            # Delete just the highlighted row
             self._selected = {email}
 
         count = remove_subscribers(list(self._selected))
@@ -451,11 +471,11 @@ class SubscriberManager(Screen):
                 imported, skipped = import_from_csv(path)
                 self._reload(self._search_query)
                 self._set_status(
-                    f"✓ Imported {imported} new · {skipped} duplicates skipped",
+                    f"✓ Imported {imported} · {skipped} duplicates",
                     "green",
                 )
             except Exception as e:
-                self._set_status(f"✗ Import error: {e}", "red")
+                self._set_status(f"✗ {e}", "red")
 
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
@@ -464,57 +484,64 @@ class SubscriberManager(Screen):
         ))
 
     def _export_csv(self):
-        """Export selected (or all) subscribers to a CSV file."""
         emails = list(self._selected) if self._selected else None
         tmp    = Path.home() / ".voidsend" / (
             "selected_export.csv" if emails else "all_export.csv"
         )
         count = export_to_csv(str(tmp), emails)
-        self._set_status(
-            f"✓ Exported {count} subscribers → {tmp.name}", "green"
-        )
+        if count:
+            self._set_status(
+                f"✓ Exported {count} → {tmp.name}", "green"
+            )
+        else:
+            self._set_status("✗ Nothing to export", "red")
 
     def _use_selected(self):
-        """Pass selected subscribers (or all) to caller as temp CSV."""
         if not self.on_select:
             self.app.pop_screen()
             return
 
-        emails = list(self._selected) if self._selected else None
+        emails = (
+            list(self._selected)
+            if self._selected
+            else [s["email"] for s in self._filtered]
+        )
 
-        if emails:
-            csv_path = get_selected_csv(emails)
-            count    = len(emails)
-        else:
-            # No selection — use all visible (filtered or all)
-            visible_emails = [s["email"] for s in self._filtered]
-            if not visible_emails:
-                self._set_status("✗ No subscribers to use", "red")
-                return
-            csv_path = get_selected_csv(visible_emails)
-            count    = len(visible_emails)
+        if not emails:
+            self._set_status(
+                "✗ No subscribers — add some first", "red"
+            )
+            return
 
-        self.on_select(csv_path, count)
+        csv_path = write_temp_csv(emails)
+        if not csv_path:
+            self._set_status(
+                "✗ Could not write list — add subscribers first",
+                "red",
+            )
+            return
+
+        self.on_select(csv_path, len(emails))
         self.app.pop_screen()
 
     def on_button_pressed(self, event: Button.Pressed):
         bid = event.button.id
-        if bid == "btn_add":
+        if bid == "btn_add_sub":
             self._open_add_dialog()
-        elif bid == "btn_search":
+        elif bid == "btn_search_sub":
             self._open_search()
-        elif bid == "btn_select_all":
+        elif bid == "btn_sel_all":
             self.action_select_all()
-        elif bid == "btn_clear_sel":
+        elif bid == "btn_clr_sel":
             self._selected = set()
             self._reload(self._search_query)
-        elif bid == "btn_delete":
+        elif bid == "btn_delete_sub":
             self._delete_selected()
-        elif bid == "btn_import":
+        elif bid == "btn_import_sub":
             self._import_csv()
-        elif bid == "btn_export":
+        elif bid == "btn_export_sub":
             self._export_csv()
-        elif bid == "btn_use":
+        elif bid == "btn_use_sub":
             self._use_selected()
 
     def action_cancel(self):

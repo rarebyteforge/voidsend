@@ -1,0 +1,30 @@
+[1m────────────────────────────────────────────────────────────[0m
+  [95m▓▒░ VOIDSEND DEV TRACER ░▒▓[0m  [2m13:47:15.366[0m
+[1m────────────────────────────────────────────────────────────[0m
+
+  [1mThread:[0m [2mMainThread[0m
+  [1mActive:[0m [92msnapshot_threads[0m  [2mdev_trace.py:119[0m
+  [2mStack (innermost first):[0m
+    ▶ [92msnapshot_threads[0m  [2mdev_trace.py:119[0m
+      [92mrun_live[0m  [2mdev_trace.py:251[0m
+      [92m<module>[0m  [2mdev_trace.py:337[0m
+  [2mLocals:[0m
+  [2mresults[0m = [93m[][0m
+  [2mall_frames[0m = [93m{500087430368: <frame at 0x746fae9470, file '/data/data/com.termux/files/home/vo...[0m
+  [2mthread[0m = [93m<_MainThread(MainThread, started 511199726880)>[0m
+  [2mtid[0m = [93m511199726880[0m
+  [2mframe[0m = [93m<frame at 0x746e678040, file '/data/data/com.termux/files/home/voidsend/dev_trac...[0m
+  [2m... +2 more[0m
+
+  [1mThread:[0m [2mThread-1 (handle_key)[0m
+  [1mActive:[0m [92mhandle_key[0m  [2mdev_trace.py:231[0m
+  [2mLocals:[0m
+  [2mtermios[0m = [93m<module 'termios' from '/data/data/com.termux/files/usr/lib/python3.13/lib-dynlo...[0m
+  [2mtty[0m = [93m<module 'tty' from '/data/data/com.termux/files/usr/lib/python3.13/tty.py'>[0m
+  [2mfd[0m = [93m0[0m
+  [2mold[0m = [93m[16384, 4, 191, 2560, 15, 15, [b'\x03', b'\x1c', b'\x7f', b'\x15', b'\x04', 0, 1...[0m
+  [2mch[0m = [93m'\r'[0m
+  [2m... +3 more[0m
+
+[1m────────────────────────────────────────────────────────────[0m
+  [2m[q] quit  [l] toggle locals  [s] save snapshot  [f] freeze[0m

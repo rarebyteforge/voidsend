@@ -453,6 +453,32 @@ case "$COMMAND" in
   venv-off)   cmd_venv_off ;;
   clean)      cmd_clean ;;
   import)     cmd_import "$@" ;;
+  trace)      cmd_trace "$@" ;;
+  snap)       cmd_trace_once ;;
   help|--help|-h) cmd_help ;;
   *)          error "Unknown command: $COMMAND. Run './dev.sh help'" ;;
 esac
+
+cmd_trace() {
+  info "Starting VoidSend dev tracer..."
+  echo ""
+  echo -e "${CYAN}Usage:${RESET}"
+  echo "  Open TWO Termux sessions:"
+  echo "  Session 1: python main.py          (run the app)"
+  echo "  Session 2: python dev_trace.py     (run the tracer)"
+  echo ""
+  echo -e "${CYAN}Tracer commands:${RESET}"
+  echo "  q = quit tracer"
+  echo "  l = toggle local variables"
+  echo "  f = freeze display"
+  echo "  s = save snapshot to file"
+  echo ""
+  echo -e "${YELLOW}Starting tracer in 2 seconds...${RESET}"
+  sleep 2
+  "$PYTHON" dev_trace.py "$@"
+}
+
+cmd_trace_once() {
+  info "Single frame snapshot:"
+  "$PYTHON" dev_trace.py --once --locals
+}

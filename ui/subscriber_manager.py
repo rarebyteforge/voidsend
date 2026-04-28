@@ -1,6 +1,6 @@
 # ui/subscriber_manager.py
 # VoidSend - Inline subscriber manager
-# Fixed: crash when adding subscriber before any CSV loaded
+# Fixed: Add button unresponsive after CSV import
 
 import csv
 import json
@@ -9,11 +9,10 @@ import time
 from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, ScrollableContainer
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
-    Button, Header, Footer,
-    DataTable, Static, Label
+    Button, DataTable, Static
 )
 from typing import Optional, Callable
 
@@ -42,7 +41,6 @@ def _save_all(subs: list[dict]):
 
 
 def add_subscriber(email: str, name: str = "", **extra) -> bool:
-    """Add subscriber. Returns False if already exists."""
     email = email.strip().lower()
     if not EMAIL_RE.match(email):
         return False
@@ -130,21 +128,16 @@ def export_to_csv(
     return len(subs)
 
 
-def write_temp_csv(emails: Optional[list[str]] = None) -> Optional[str]:
-    """
-    Write subscribers to a temp CSV for job use.
-    Returns path string, or None if no subscribers to write.
-    """
+def write_temp_csv(
+    emails: Optional[list[str]] = None,
+) -> Optional[str]:
     subs = _load_all()
-
     if emails:
         email_set = {e.lower() for e in emails}
         subs      = [s for s in subs
                      if s["email"].lower() in email_set]
-
     if not subs:
-        return None  # ← safe: caller checks for None
-
+        return None
     tmp = Path.home() / ".voidsend" / (
         "selected_subscribers.csv"
         if emails else "all_subscribers.csv"
@@ -160,11 +153,6 @@ def subscriber_count() -> int:
 # ── Screen ────────────────────────────────────────────────────────────────────
 
 class SubscriberManager(Screen):
-    """
-    Full subscriber manager.
-    on_select(csv_path, count) called when user confirms.
-    If on_select is None — standalone management mode.
-    """
 
     BINDINGS = [
         Binding("escape", "cancel",     "Back"),
@@ -172,53 +160,97 @@ class SubscriberManager(Screen):
         Binding("d",      "delete_sel", "Delete"),
         Binding("s",      "search",     "Search"),
         Binding("ctrl+a", "select_all", "Select All"),
+        Binding("space",  "toggle_row", "Toggle Select"),
     ]
 
     CSS = """
+    SubscriberManager {
+        background: #0a0e0a;
+    }
+    #sub_titlebar {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-align: center;
+        padding: 0 1;
+        text-style: bold;
+        border-bottom: solid #1a4d1a;
+        height: 1;
+    }
     #sub_container {
         height: 1fr;
-        padding: 1 2;
-    }
-    #sub_title {
-        background: $accent;
-        color: $text;
-        text-align: center;
-        padding: 1;
-        text-style: bold;
-        margin-bottom: 1;
+        padding: 0 1;
+        background: #0a0e0a;
     }
     #search_bar {
         height: 1;
         padding: 0 1;
         margin-bottom: 1;
+        color: #00cc33;
     }
     #sub_table {
         height: 1fr;
-        border: solid $accent;
+        border: solid #1a4d1a;
+        background: #080c08;
+        color: #00cc33;
+    }
+    DataTable > .datatable--header {
+        background: #0d1a0d;
+        color: #00ff41;
+        text-style: bold;
+    }
+    DataTable > .datatable--cursor {
+        background: #0d3d0d;
+        color: #00ff41;
     }
     #sub_status {
         min-height: 1;
         margin-top: 1;
         padding: 0 1;
+        color: #00cc33;
+    }
+    #sub_hint {
+        height: 1;
+        padding: 0 1;
+        color: #1a6b1a;
     }
     #sub_actions {
         height: auto;
         margin-top: 1;
-        padding: 1 0;
+        background: #0a0e0a;
     }
     #sub_actions Button {
         margin: 0 1;
         min-width: 14;
         height: 3;
+        background: #0d1a0d;
+        color: #00cc33;
+        border: solid #1a4d1a;
     }
     #sub_actions2 {
         height: auto;
-        padding: 0;
+        background: #0a0e0a;
     }
     #sub_actions2 Button {
         margin: 0 1;
         min-width: 14;
         height: 3;
+        background: #080c08;
+        color: #1a8c1a;
+        border: solid #0d2d0d;
+    }
+    #btn_add_sub {
+        background: #003300 !important;
+        color: #00ff41 !important;
+        border: solid #00cc33 !important;
+    }
+    #btn_use_sub {
+        background: #003300 !important;
+        color: #00ff41 !important;
+        border: solid #00cc33 !important;
+    }
+    #btn_delete_sub {
+        color: #cc3300 !important;
+        border: solid #441100 !important;
     }
     """
 
@@ -234,33 +266,40 @@ class SubscriberManager(Screen):
         self._search_query = ""
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static(
+            "▓▒░ SUBSCRIBER MANAGER ░▒▓",
+            id="sub_titlebar",
+        )
         yield Container(
-            Static("👥  Subscriber Manager", id="sub_title"),
             Static("", id="search_bar"),
+            # ── Key hint ──────────────────────────────────────────────────
+            Static(
+                "[dim]SPACE to select row  ·  A to add  ·  D to delete"
+                "  ·  S to search  ·  ESC to back[/dim]",
+                id="sub_hint",
+            ),
             DataTable(id="sub_table", cursor_type="row"),
             Static("", id="sub_status"),
             Horizontal(
-                Button("+ Add [A]",     id="btn_add",        variant="success"),
-                Button("Search [S]",    id="btn_search",     variant="default"),
-                Button("Select All",    id="btn_select_all", variant="default"),
-                Button("Clear Sel",     id="btn_clear_sel",  variant="default"),
+                Button("+ Add [A]",    id="btn_add_sub",    variant="success"),
+                Button("Search [S]",   id="btn_search_sub", variant="default"),
+                Button("Select All",   id="btn_sel_all",    variant="default"),
+                Button("Clear",        id="btn_clr_sel",    variant="default"),
                 id="sub_actions",
             ),
             Horizontal(
-                Button("Delete [D]",    id="btn_delete",     variant="error"),
-                Button("Import CSV",    id="btn_import",     variant="default"),
-                Button("Export CSV",    id="btn_export",     variant="default"),
+                Button("Delete [D]",   id="btn_delete_sub", variant="error"),
+                Button("Import CSV",   id="btn_import_sub", variant="default"),
+                Button("Export CSV",   id="btn_export_sub", variant="default"),
                 Button(
                     "✓ Use Selected" if self.on_select else "Back",
-                    id="btn_use",
-                    variant="success" if self.on_select else "default",
+                    id="btn_use_sub",
+                    variant="success",
                 ),
                 id="sub_actions2",
             ),
             id="sub_container",
         )
-        yield Footer()
 
     def on_mount(self):
         table = self.query_one(DataTable)
@@ -270,35 +309,39 @@ class SubscriberManager(Screen):
     def _reload(self, query: str = ""):
         self._search_query = query
         self._filtered     = search_subscribers(query)
+        total              = subscriber_count()
 
         table = self.query_one(DataTable)
         table.clear()
 
-        total = subscriber_count()
-
         if not self._filtered:
             table.add_row(
-                "", "[dim]No subscribers yet — tap + Add[/dim]", "", ""
+                "",
+                "[dim]No subscribers — press A to add[/dim]",
+                "", "",
             )
             self._set_status(
-                f"0 of {total} subscribers"
+                f"0 of {total}"
                 + (f" match '{query}'" if query else ""),
                 "dim",
             )
             return
 
         for sub in self._filtered:
-            email    = sub["email"]
-            name     = sub.get("name", "")
-            added    = sub.get("added_at", "")[:10]
-            tick     = (
-                "[green]●[/green]" if email in self._selected else " "
+            email = sub["email"]
+            tick  = (
+                "[green]●[/green]"
+                if email in self._selected else " "
             )
-            table.add_row(tick, email, name, added)
+            table.add_row(
+                tick,
+                email,
+                sub.get("name", ""),
+                sub.get("added_at", "")[:10],
+            )
 
         sel   = len(self._selected)
         shown = len(self._filtered)
-
         self._set_status(
             f"Total: [white]{total}[/white]"
             + (
@@ -312,20 +355,18 @@ class SubscriberManager(Screen):
             "dim",
         )
 
-        if query:
-            self.query_one("#search_bar", Static).update(
-                f"[yellow]🔍 '{query}' — {shown} results[/yellow]"
-                f"  [dim](S to search again)[/dim]"
-            )
-        else:
-            self.query_one("#search_bar", Static).update("")
+        self.query_one("#search_bar", Static).update(
+            f"[yellow]🔍 '{query}'  {shown} results[/yellow]"
+            if query else ""
+        )
 
     def _set_status(self, msg: str, color: str = "white"):
         self.query_one("#sub_status", Static).update(
             f"[{color}]{msg}[/{color}]"
         )
 
-    def _selected_email(self) -> Optional[str]:
+    def _cursor_email(self) -> Optional[str]:
+        """Get email of currently highlighted row."""
         table = self.query_one(DataTable)
         if table.cursor_row is None:
             return None
@@ -333,10 +374,9 @@ class SubscriberManager(Screen):
             return None
         return self._filtered[table.cursor_row]["email"]
 
-    def on_data_table_row_selected(
-        self, event: DataTable.RowSelected
-    ):
-        email = self._selected_email()
+    def action_toggle_row(self):
+        """Space bar toggles selection of highlighted row."""
+        email = self._cursor_email()
         if not email:
             return
         if email in self._selected:
@@ -345,7 +385,7 @@ class SubscriberManager(Screen):
             self._selected.add(email)
         self._reload(self._search_query)
 
-    # ── Actions ───────────────────────────────────────────────────────────────
+    # ── Key bindings fire these ───────────────────────────────────────────────
 
     def action_add(self):
         self._open_add_dialog()
@@ -360,6 +400,8 @@ class SubscriberManager(Screen):
         self._selected = {s["email"] for s in self._filtered}
         self._reload(self._search_query)
 
+    # ── Dialog helpers ────────────────────────────────────────────────────────
+
     def _open_add_dialog(self):
         from ui.input_dialog import InputDialog
 
@@ -372,9 +414,7 @@ class SubscriberManager(Screen):
                 ok = add_subscriber(email=email, name=name.strip())
                 if ok:
                     self._reload(self._search_query)
-                    self._set_status(
-                        f"✓ Added: {email}", "green"
-                    )
+                    self._set_status(f"✓ Added: {email}", "green")
                 else:
                     self._set_status(
                         f"✗ {email} already exists or invalid",
@@ -412,7 +452,7 @@ class SubscriberManager(Screen):
             self._reload(q.strip())
 
         self.app.push_screen(InputDialog(
-            title         = "Search Subscribers",
+            title         = "Search",
             label         = "Search by email or name:",
             on_submit     = on_query,
             initial_value = self._search_query,
@@ -421,10 +461,10 @@ class SubscriberManager(Screen):
 
     def _delete_selected(self):
         if not self._selected:
-            email = self._selected_email()
+            email = self._cursor_email()
             if not email:
                 self._set_status(
-                    "✗ Tap a row to select, then delete", "red"
+                    "✗ Press SPACE to select a row first", "red"
                 )
                 return
             self._selected = {email}
@@ -448,7 +488,7 @@ class SubscriberManager(Screen):
                     "green",
                 )
             except Exception as e:
-                self._set_status(f"✗ Import error: {e}", "red")
+                self._set_status(f"✗ {e}", "red")
 
         self.app.push_screen(FileBrowserScreen(
             on_select  = on_picked,
@@ -467,60 +507,56 @@ class SubscriberManager(Screen):
                 f"✓ Exported {count} → {tmp.name}", "green"
             )
         else:
-            self._set_status("✗ No subscribers to export", "red")
+            self._set_status("✗ Nothing to export", "red")
 
     def _use_selected(self):
-        """Pass selected (or all visible) to caller as temp CSV."""
         if not self.on_select:
             self.app.pop_screen()
             return
 
-        # Decide which emails to use
-        if self._selected:
-            emails = list(self._selected)
-        else:
-            # Use all visible (filtered or all)
-            emails = [s["email"] for s in self._filtered]
+        emails = (
+            list(self._selected)
+            if self._selected
+            else [s["email"] for s in self._filtered]
+        )
 
         if not emails:
             self._set_status(
-                "✗ No subscribers available. Add some first.", "red"
+                "✗ No subscribers — add some first", "red"
             )
             return
 
-        # ── Safe: write temp CSV, check it worked ────────────────────────
         csv_path = write_temp_csv(emails)
-
         if not csv_path:
             self._set_status(
-                "✗ Could not write subscriber list. "
-                "Add subscribers first.",
-                "red",
+                "✗ Could not write list", "red"
             )
             return
 
-        count = len(emails)
-        self.on_select(csv_path, count)
+        self.on_select(csv_path, len(emails))
         self.app.pop_screen()
 
-    def on_button_pressed(self, event: Button.Pressed):
+    # ── Button handler ────────────────────────────────────────────────────────
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()  # prevent event bubbling to table
         bid = event.button.id
-        if bid == "btn_add":
+        if bid == "btn_add_sub":
             self._open_add_dialog()
-        elif bid == "btn_search":
+        elif bid == "btn_search_sub":
             self._open_search()
-        elif bid == "btn_select_all":
+        elif bid == "btn_sel_all":
             self.action_select_all()
-        elif bid == "btn_clear_sel":
+        elif bid == "btn_clr_sel":
             self._selected = set()
             self._reload(self._search_query)
-        elif bid == "btn_delete":
+        elif bid == "btn_delete_sub":
             self._delete_selected()
-        elif bid == "btn_import":
+        elif bid == "btn_import_sub":
             self._import_csv()
-        elif bid == "btn_export":
+        elif bid == "btn_export_sub":
             self._export_csv()
-        elif bid == "btn_use":
+        elif bid == "btn_use_sub":
             self._use_selected()
 
     def action_cancel(self):

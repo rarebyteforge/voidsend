@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{RAFFLE_NAME}} — Ticket Verification</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f0f;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2f3d;
+      border-radius: 12px;
+      padding: 40px 32px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+
+    .logo {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #00e5a0;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffffff;
+      text-align: center;
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }
+
+    .prize-badge {
+      display: inline-block;
+      background: rgba(0,229,160,0.12);
+      border: 1px solid rgba(0,229,160,0.3);
+      color: #00e5a0;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 14px;
+      border-radius: 20px;
+      margin: 8px auto 20px;
+      display: block;
+      text-align: center;
+      width: fit-content;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .raffle-message {
+      font-size: 14px;
+      color: #a0aec0;
+      text-align: center;
+      margin-bottom: 28px;
+      line-height: 1.6;
+    }
+
+    .input-group {
+      margin-bottom: 16px;
+    }
+
+    .input-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #6b7694;
+      margin-bottom: 8px;
+    }
+
+    .ticket-input {
+      width: 100%;
+      padding: 16px;
+      background: #0d0f14;
+      border: 2px solid #2a2f3d;
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 28px;
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 8px;
+      font-family: 'Courier New', monospace;
+      transition: border-color 0.2s;
+      outline: none;
+    }
+
+    .ticket-input:focus {
+      border-color: #00e5a0;
+      box-shadow: 0 0 0 3px rgba(0,229,160,0.1);
+    }
+
+    .ticket-input::placeholder {
+      color: #2a2f3d;
+      letter-spacing: 4px;
+      font-size: 20px;
+    }
+
+    .char-counter {
+      text-align: right;
+      font-size: 11px;
+      color: #6b7694;
+      margin-top: 6px;
+    }
+
+    .char-counter span {
+      color: #00e5a0;
+      font-weight: 600;
+    }
+
+    .btn-verify {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #00e5a0, #00b87a);
+      color: #0f0f0f;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      margin-top: 8px;
+    }
+
+    .btn-verify:hover { opacity: 0.9; }
+    .btn-verify:active { transform: scale(0.98); }
+    .btn-verify:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .result {
+      margin-top: 24px;
+      padding: 20px;
+      border-radius: 8px;
+      display: none;
+      text-align: center;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .result.winner {
+      background: rgba(0,229,160,0.08);
+      border: 2px solid rgba(0,229,160,0.4);
+    }
+
+    .result.loser {
+      background: rgba(255,107,107,0.08);
+      border: 2px solid rgba(255,107,107,0.3);
+    }
+
+    .result.invalid {
+      background: rgba(245,166,35,0.08);
+      border: 2px solid rgba(245,166,35,0.3);
+    }
+
+    .result-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+      display: block;
+    }
+
+    .result-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .result.winner .result-title { color: #00e5a0; }
+    .result.loser  .result-title { color: #ff6b6b; }
+    .result.invalid .result-title { color: #f5a623; }
+
+    .result-message {
+      font-size: 14px;
+      color: #a0aec0;
+      line-height: 1.6;
+    }
+
+    .result.winner .result-message { color: #86efca; }
+
+    .prize-won {
+      margin-top: 12px;
+      padding: 10px 16px;
+      background: rgba(0,229,160,0.15);
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #00e5a0;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 20px 0;
+      color: #6b7694;
+      font-size: 14px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #2a2f3d;
+      border-top-color: #00e5a0;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .expiry {
+      text-align: center;
+      font-size: 11px;
+      color: #4a5568;
+      margin-top: 20px;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2a2f3d;
+      margin: 24px 0;
+    }
+
+    .powered-by {
+      text-align: center;
+      font-size: 10px;
+      color: #2a2f3d;
+      margin-top: 20px;
+      letter-spacing: 0.1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">VoidSend Raffle</div>
+
+    <h1>{{RAFFLE_NAME}}</h1>
+    <div class="prize-badge">🏆 Prize: {{RAFFLE_PRIZE}}</div>
+
+    <p class="raffle-message">{{RAFFLE_MESSAGE}}</p>
+
+    <div class="input-group">
+      <label class="input-label" for="ticket">
+        Your Ticket Number ({{TICKET_LENGTH}} digits)
+      </label>
+      <input
+        type="text"
+        id="ticket"
+        class="ticket-input"
+        placeholder="{{'0' * TICKET_LENGTH}}"
+        maxlength="{{TICKET_LENGTH}}"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        autocomplete="off"
+        oninput="onTicketInput(this)"
+      >
+      <div class="char-counter">
+        <span id="char-count">0</span> / {{TICKET_LENGTH}} digits
+      </div>
+    </div>
+
+    <button
+      class="btn-verify"
+      id="btn-verify"
+      onclick="verify()"
+      disabled
+    >
+      Check My Ticket
+    </button>
+
+    <div class="loading" id="loading">
+      <span class="spinner"></span> Checking your ticket...
+    </div>
+
+    <div class="result" id="result">
+      <span class="result-icon" id="result-icon"></span>
+      <div class="result-title" id="result-title"></div>
+      <div class="result-message" id="result-message"></div>
+      <div class="prize-won" id="prize-won" style="display:none"></div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="expiry">
+      Raffle closes: {{EXPIRY_DATE}}
+    </div>
+
+    <div class="powered-by">POWERED BY VOIDSEND</div>
+  </div>
+
+  <script>
+    const TICKET_LENGTH = {{TICKET_LENGTH}};
+
+    function onTicketInput(input) {
+      // Only allow digits
+      input.value = input.value.replace(/[^0-9]/g, '');
+
+      const len = input.value.length;
+      document.getElementById('char-count').textContent = len;
+
+      const btn = document.getElementById('btn-verify');
+      btn.disabled = (len !== TICKET_LENGTH);
+    }
+
+    async function verify() {
+      const ticket = document.getElementById('ticket').value.trim();
+      if (ticket.length !== TICKET_LENGTH) return;
+
+      // Show loading
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('result').style.display  = 'none';
+      document.getElementById('btn-verify').disabled   = true;
+
+      try {
+        const response = await fetch('/verify', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ ticket }),
+        });
+
+        const data = await response.json();
+        showResult(data);
+
+      } catch (err) {
+        showResult({
+          valid:   false,
+          winner:  false,
+          message: 'Connection error. Please try again.',
+        });
+      } finally {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('btn-verify').disabled   = false;
+      }
+    }
+
+    function showResult(data) {
+      const el      = document.getElementById('result');
+      const icon    = document.getElementById('result-icon');
+      const title   = document.getElementById('result-title');
+      const message = document.getElementById('result-message');
+      const prize   = document.getElementById('prize-won');
+
+      el.className = 'result';
+
+      if (data.winner) {
+        el.classList.add('winner');
+        icon.textContent    = '🎉';
+        title.textContent   = 'You\'re a Winner!';
+        message.textContent = data.message;
+        prize.style.display = 'block';
+        prize.textContent   = '🏆 ' + data.prize;
+        // Confetti effect
+        confetti();
+      } else if (data.valid) {
+        el.classList.add('loser');
+        icon.textContent    = '😔';
+        title.textContent   = 'Not a Winner';
+        message.textContent = data.message;
+        prize.style.display = 'none';
+      } else {
+        el.classList.add('invalid');
+        icon.textContent    = '⚠️';
+        title.textContent   = 'Invalid Ticket';
+        message.textContent = data.message;
+        prize.style.display = 'none';
+      }
+
+      el.style.display = 'block';
+    }
+
+    function confetti() {
+      // Simple confetti burst
+      const colors = ['#00e5a0', '#0099ff', '#f5a623', '#ff6b6b', '#fff'];
+      for (let i = 0; i < 60; i++) {
+        setTimeout(() => {
+          const el = document.createElement('div');
+          el.style.cssText = `
+            position:fixed;
+            width:8px;height:8px;
+            background:${colors[Math.floor(Math.random()*colors.length)]};
+            border-radius:50%;
+            left:${Math.random()*100}vw;
+            top:-10px;
+            pointer-events:none;
+            z-index:9999;
+            animation:fall ${1+Math.random()*2}s linear forwards;
+          `;
+          document.body.appendChild(el);
+          setTimeout(() => el.remove(), 3000);
+        }, i * 30);
+      }
+
+      // Add fall animation
+      if (!document.getElementById('confetti-style')) {
+        const style = document.createElement('style');
+        style.id = 'confetti-style';
+        style.textContent = `
+          @keyframes fall {
+            to { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    }
+
+    // Allow Enter key to submit
+    document.getElementById('ticket').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') verify();
+    });
+  </script>
+</body>
+</html>

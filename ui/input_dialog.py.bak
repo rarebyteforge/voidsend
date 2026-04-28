@@ -1,20 +1,21 @@
 # ui/input_dialog.py
 # VoidSend - Full screen input dialog for Termux keyboard reliability
-# Fixed: removed Header/Footer which crash on older Textual versions
+# Pushing a new screen with a single Input reliably triggers the keyboard
+# every time, working around Textual's focus issues on Termux.
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Header, Footer, Input, Label, Static
 from typing import Callable, Optional
 
 
 class InputDialog(Screen):
     """
     Full screen single-field input dialog.
-    No Header/Footer — avoids HeaderTitle crash on older Textual.
     Reliably triggers Termux keyboard on every open.
+    on_submit(value: str) called when user confirms.
     """
 
     BINDINGS = [
@@ -22,43 +23,36 @@ class InputDialog(Screen):
     ]
 
     CSS = """
-    InputDialog {
-        background: #0a0e0a;
-    }
-    #dialog_outer {
+    #dialog_container {
         height: 1fr;
+        padding: 2 3;
         align: center middle;
-        background: #0a0e0a;
-    }
-    #dialog_titlebar {
-        background: #0d1a0d;
-        color: #00ff41;
-        text-align: center;
-        padding: 0 1;
-        text-style: bold;
-        border-bottom: solid #1a4d1a;
-        height: 1;
     }
     #dialog_inner {
         height: auto;
-        border: solid #1a4d1a;
+        border: solid $accent;
         padding: 2 3;
-        width: 90%;
-        background: #0d1a0d;
+        width: 100%;
+    }
+    #dialog_title {
+        background: $accent;
+        color: $text;
+        text-align: center;
+        padding: 1;
+        text-style: bold;
+        margin-bottom: 2;
     }
     #dialog_label {
-        color: #00cc33;
         margin-bottom: 1;
+        color: $text-muted;
     }
     #dialog_input {
-        margin-bottom: 1;
-        background: #080c08;
-        color: #00ff41;
-        border: solid #1a4d1a;
+        margin-bottom: 2;
     }
     #dialog_hint {
-        color: #1a6b1a;
-        margin-bottom: 1;
+        color: $text-muted;
+        margin-bottom: 2;
+        text-style: italic;
     }
     #dialog_status {
         min-height: 1;
@@ -74,27 +68,17 @@ class InputDialog(Screen):
         min-width: 16;
         height: 3;
     }
-    #btn_confirm {
-        background: #003300;
-        color: #00ff41;
-        border: solid #00cc33;
-    }
-    #btn_cancel_dlg {
-        background: #1a0000;
-        color: #cc3300;
-        border: solid #441100;
-    }
     """
 
     def __init__(
         self,
-        title:         str,
-        label:         str,
-        on_submit:     Callable[[str], None],
+        title: str,
+        label: str,
+        on_submit: Callable[[str], None],
         initial_value: str = "",
-        hint:          str = "",
-        password:      bool = False,
-        validator:     Optional[Callable[[str], Optional[str]]] = None,
+        hint: str = "",
+        password: bool = False,
+        validator: Optional[Callable[[str], Optional[str]]] = None,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -107,45 +91,34 @@ class InputDialog(Screen):
         self._validator     = validator
 
     def compose(self) -> ComposeResult:
+        yield Header()
         yield Container(
-            Static(
-                f"▓▒░ {self._title.upper()} ░▒▓",
-                id="dialog_titlebar",
-            ),
-            Container(
-                Vertical(
-                    Static(self._label, id="dialog_label"),
-                    Input(
-                        value    = self._initial_value,
-                        password = self._password,
-                        id       = "dialog_input",
-                    ),
-                    Static(
-                        f"[dim]{self._hint}[/dim]"
-                        if self._hint else "",
-                        id="dialog_hint",
-                    ),
-                    Static("", id="dialog_status"),
-                    Container(
-                        Button(
-                            "✓ Confirm",
-                            id="btn_confirm",
-                            variant="success",
-                        ),
-                        Button(
-                            "Cancel",
-                            id="btn_cancel_dlg",
-                            variant="error",
-                        ),
-                        id="dialog_btns",
-                    ),
-                    id="dialog_inner",
+            Vertical(
+                Static(self._title, id="dialog_title"),
+                Label(self._label, id="dialog_label"),
+                Input(
+                    value       = self._initial_value,
+                    password    = self._password,
+                    id          = "dialog_input",
                 ),
-                id="dialog_outer",
+                Static(
+                    f"[dim]{self._hint}[/dim]" if self._hint else "",
+                    id="dialog_hint",
+                ),
+                Static("", id="dialog_status"),
+                Container(
+                    Button("✓ Confirm", id="btn_confirm", variant="success"),
+                    Button("Cancel",    id="btn_cancel",  variant="error"),
+                    id="dialog_btns",
+                ),
+                id="dialog_inner",
             ),
+            id="dialog_container",
         )
+        yield Footer()
 
     def on_mount(self):
+        # Focus input immediately — triggers keyboard on Termux
         self.call_after_refresh(self._focus_input)
 
     def _focus_input(self):
@@ -170,12 +143,13 @@ class InputDialog(Screen):
         self.app.pop_screen()
 
     def on_input_submitted(self, event: Input.Submitted):
+        """Allow Enter key to confirm."""
         self._submit()
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_confirm":
             self._submit()
-        elif event.button.id == "btn_cancel_dlg":
+        elif event.button.id == "btn_cancel":
             self.action_cancel()
 
     def action_cancel(self):
